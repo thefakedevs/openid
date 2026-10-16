@@ -7,8 +7,10 @@ import androidx.biometric.BiometricPrompt
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
+import ru.lavafrai.openid.R
 import ru.lavafrai.openid.data.core.VaultAuthentication
 import ru.lavafrai.openid.data.core.VaultProtection
 import ru.lavafrai.openid.models.auth.AuthenticationFailure
@@ -21,14 +23,19 @@ fun SystemAuthentication(
     dispatch: (PocketAction) -> Unit,
 ) {
     val context = LocalContext.current
-    DisposableEffect(request, context) {
+    val mode = if (request.kind == AuthKind.LEGACY_PROFILE_MIGRATION) {
+        VaultProtection.LEGACY_SYSTEM_AUTH
+    } else {
+        VaultProtection.BIOMETRIC
+    }
+    val allowed = VaultAuthentication.allowedAuthenticators(mode)
+    val title = stringResource(request.kind.titleRes)
+    val subtitle = stringResource(
+        if (allowed and DEVICE_CREDENTIAL != 0) R.string.auth_device_subtitle else R.string.auth_biometric_subtitle,
+    )
+    val cancel = stringResource(R.string.action_cancel)
+    DisposableEffect(request, context, title, subtitle, cancel) {
         val activity = context.activity()
-        val mode = if (request.kind == AuthKind.LEGACY_PROFILE_MIGRATION) {
-            VaultProtection.LEGACY_SYSTEM_AUTH
-        } else {
-            VaultProtection.BIOMETRIC
-        }
-        val allowed = VaultAuthentication.allowedAuthenticators(mode)
         val unavailable = VaultAuthentication.unavailable(context, mode)
         if (activity == null || unavailable != null) {
             dispatch(PocketAction.AuthFailed(request, unavailable ?: AuthenticationFailure.FAILED))
@@ -68,18 +75,10 @@ fun SystemAuthentication(
                     },
                 )
             val info = BiometricPrompt.PromptInfo.Builder()
-                .setTitle(request.kind.title)
-                .setSubtitle(
-                    if (request.kind == AuthKind.LEGACY_PROFILE_MIGRATION &&
-                        allowed and DEVICE_CREDENTIAL != 0
-                    ) {
-                        "Используйте отпечаток или PIN / пароль телефона"
-                    } else {
-                        "Используйте отпечаток или поддерживаемую биометрию"
-                    },
-                )
+                .setTitle(title)
+                .setSubtitle(subtitle)
                 .setAllowedAuthenticators(allowed)
-            if (allowed and DEVICE_CREDENTIAL == 0) info.setNegativeButtonText("Отмена")
+            if (allowed and DEVICE_CREDENTIAL == 0) info.setNegativeButtonText(cancel)
             try {
                 prompt.authenticate(info.build(), BiometricPrompt.CryptoObject(request.cipher))
             } catch (failure: Exception) {

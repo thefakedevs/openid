@@ -10,6 +10,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.composables.icons.materialsymbols.rounded.R as Symbols
 import ru.lavafrai.openid.R
@@ -32,26 +33,26 @@ fun SettingsScreen(
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
         ProfileIdentity(state.account?.accountId)
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Способ входа", style = MaterialTheme.typography.titleLarge)
+            Text(stringResource(R.string.sign_in_method), style = MaterialTheme.typography.titleLarge)
             PinProtectionChoices(state.pinProtection, !state.busy, onPinProtection)
         }
         if (state.hasSettingsChanges) {
             Text(
                 when {
                     state.pinProtection == PinProtection.NOT_SAVED ->
-                        "Сохранённый PIN будет удалён. Сеанс завершится."
+                        stringResource(R.string.settings_manual_notice)
 
                     state.savedPin is SavedPinState.Saved ->
-                        "Сеанс завершится. Для нового входа подтвердите биометрию."
+                        stringResource(R.string.settings_biometric_notice)
 
-                    else -> "После применения введите PIN один раз, чтобы сохранить его с биометрией."
+                    else -> stringResource(R.string.settings_save_pin_notice)
                 },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
         PrimaryButton(
-            "Применить и выйти",
+            stringResource(R.string.settings_apply),
             onApply,
             enabled = state.hasSettingsChanges && !state.busy,
             icon = R.drawable.materialsymbols_ic_check_rounded,
@@ -63,7 +64,7 @@ fun SettingsScreen(
             ) {
                 PocketIcon(R.drawable.materialsymbols_ic_swap_horiz_rounded)
                 Text(
-                    "Заменить профиль",
+                    stringResource(R.string.profile_replace),
                     modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.titleMedium,
                 )
@@ -71,7 +72,7 @@ fun SettingsScreen(
             }
         }
         TextButton(onClick = onDelete, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) {
-            Text("Удалить профиль", color = MaterialTheme.colorScheme.error)
+            Text(stringResource(R.string.profile_delete), color = MaterialTheme.colorScheme.error)
         }
     }
 }

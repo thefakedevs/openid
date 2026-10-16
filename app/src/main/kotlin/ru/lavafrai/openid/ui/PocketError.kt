@@ -1,5 +1,8 @@
 package ru.lavafrai.openid.ui
 
+import android.content.Context
+import androidx.annotation.StringRes
+import ru.lavafrai.openid.R
 import ru.lavafrai.openid.domain.models.QrGenerationFailure
 import ru.lavafrai.openid.domain.models.QrGenerationStage
 import ru.lavafrai.openid.domain.models.QrGenerationState
@@ -9,45 +12,45 @@ import ru.lavafrai.openid.models.errors.FailureDiagnostic
 import ru.lavafrai.openid.models.errors.FailureKind
 import ru.lavafrai.openid.models.errors.FailureReason
 
-enum class ErrorOperation(val label: String) {
-    STARTUP("Открытие хранилища"),
-    IMPORT("Импорт профиля"),
-    UNLOCK("Вход в Digital ID"),
-    QR("Получение QR"),
-    SETTINGS("Сохранение настроек"),
-    DELETE("Удаление профиля"),
-    MIGRATION("Обновление хранилища"),
-    RENDER_QR("Отображение QR"),
+enum class ErrorOperation(@StringRes val labelRes: Int) {
+    STARTUP(R.string.operation_startup),
+    IMPORT(R.string.operation_import),
+    UNLOCK(R.string.operation_unlock),
+    QR(R.string.operation_qr),
+    SETTINGS(R.string.operation_settings),
+    DELETE(R.string.operation_delete),
+    MIGRATION(R.string.operation_migration),
+    RENDER_QR(R.string.operation_render_qr),
 }
 
-enum class ErrorRecovery(val label: String) {
-    STARTUP("Повторить"),
-    EDIT_IMPORT("Исправить данные"),
-    IMPORT("Повторить импорт"),
-    BIOMETRIC("Повторить вход"),
-    UNLOCK("Войти снова"),
-    QR("Повторить запрос"),
-    SETTINGS("Повторить сохранение"),
-    DELETE("Повторить удаление"),
-    MIGRATION("Повторить обновление"),
-    REPLACE("Заменить профиль"),
+enum class ErrorRecovery(@StringRes val labelRes: Int) {
+    STARTUP(R.string.action_retry),
+    EDIT_IMPORT(R.string.recovery_edit_import),
+    IMPORT(R.string.recovery_import),
+    BIOMETRIC(R.string.recovery_biometric),
+    UNLOCK(R.string.recovery_unlock),
+    QR(R.string.recovery_qr),
+    SETTINGS(R.string.recovery_settings),
+    DELETE(R.string.recovery_delete),
+    MIGRATION(R.string.recovery_migration),
+    REPLACE(R.string.profile_replace),
 }
 
 data class PocketError(
-    val title: String,
-    val description: String,
+    val title: UiText,
+    val description: UiText,
     val diagnostic: FailureDiagnostic,
     val operation: ErrorOperation,
     val recovery: ErrorRecovery? = null,
     val stage: QrGenerationStage? = null,
 ) {
-    val report: String get() = buildString {
-        appendLine("Pocket ID · диагностика")
-        appendLine("Операция: ${operation.label}")
-        stage?.let { appendLine("Этап: ${it.name}") }
-        appendLine("Код: ${diagnostic.code}")
-        appendLine("Категория: ${diagnostic.kind}")
-        appendLine("Сообщения исключений и данные запросов исключены из отчёта.")
+    fun report(context: Context): String = buildString {
+        appendLine(context.getString(R.string.diagnostic_clip_label, context.getString(R.string.app_name)))
+        appendLine(context.getString(R.string.diagnostic_operation, context.getString(operation.labelRes)))
+        stage?.let { appendLine(context.getString(R.string.diagnostic_stage, it.name)) }
+        appendLine(context.getString(R.string.diagnostic_code, diagnostic.code))
+        appendLine(context.getString(R.string.diagnostic_kind, diagnostic.kind))
+        appendLine(context.getString(R.string.diagnostic_redaction_notice))
         appendLine()
         append(diagnostic.trace)
     }
@@ -59,7 +62,7 @@ fun Throwable.toPocketError(
 ): PocketError {
     val error = FailureDiagnostic.from(this).toPocketError(operation, recovery)
     return if (this is AuthenticationException) {
-        error.copy(title = "Не удалось подтвердить доступ", description = reason.message())
+        error.copy(title = UiText(R.string.error_auth_title), description = reason.message())
     } else {
         error
     }
@@ -71,62 +74,62 @@ fun FailureDiagnostic.toPocketError(
 ): PocketError {
     val (title, description) = when {
         reason == FailureReason.IMPORT_DECRYPTION_FAILED ->
-            "Не удалось расшифровать ссылку" to "Проверьте пароль и убедитесь, что ссылка скопирована целиком."
+            UiText(R.string.error_decryption_title) to UiText(R.string.error_decryption_description)
 
         reason == FailureReason.INVALID_IMPORT_PASSWORD ->
-            "Неподходящий пароль ссылки" to "Нужно от 12 до 256 латинских букв, цифр или печатных ASCII-символов."
+            UiText(R.string.error_password_title) to UiText(R.string.error_password_description)
 
         reason == FailureReason.INVALID_IMPORT_LINK ->
-            "Неверная ссылка импорта" to "Скопируйте полную ссылку didpocket://import/v1 вместе с данными после #."
+            UiText(R.string.error_import_link_title) to UiText(R.string.error_import_link_description)
 
         reason == FailureReason.STORAGE_KEY_MISSING ->
-            "Ключ хранилища недоступен" to
-                "Android больше не может открыть эти секреты. Понадобится повторный импорт профиля."
+            UiText(R.string.error_storage_key_title) to
+                UiText(R.string.error_storage_key_description)
 
         kind == FailureKind.NETWORK ->
-            "Нет связи с сервисом" to "Проверьте интернет или VPN и повторите попытку."
+            UiText(R.string.error_network_title) to UiText(R.string.error_network_description)
 
         kind == FailureKind.TIMEOUT ->
-            "Сервис не ответил вовремя" to "Время ожидания истекло. Попробуйте ещё раз."
+            UiText(R.string.error_timeout_title) to UiText(R.string.error_timeout_description)
 
         kind == FailureKind.TLS ->
-            "Не удалось защитить соединение" to "Проверьте дату и время на телефоне или попробуйте другую сеть."
+            UiText(R.string.error_tls_title) to UiText(R.string.error_tls_description)
 
         kind == FailureKind.RATE_LIMIT ->
-            "Слишком много запросов" to "Сервис просит подождать. Повторите попытку позже."
+            UiText(R.string.error_rate_limit_title) to UiText(R.string.error_rate_limit_description)
 
         kind == FailureKind.ACCESS_DENIED ->
-            "Сервис отклонил доступ" to "Войдите снова. Если ошибка повторится, обновите импортированный профиль."
+            UiText(R.string.error_access_denied_title) to UiText(R.string.error_access_denied_description)
 
         kind == FailureKind.SERVER ->
-            "Сервис не выполнил запрос" to "Попробуйте позже. Если ошибка повторяется, откройте подробности."
+            UiText(R.string.error_server_title) to UiText(R.string.error_server_description)
 
         kind == FailureKind.STORAGE || operation == ErrorOperation.STARTUP ->
-            "Хранилище недоступно" to
-                "Не удалось прочитать или записать секреты. Проверьте свободное место и повторите попытку."
+            UiText(R.string.error_storage_title) to
+                UiText(R.string.error_storage_description)
 
         operation == ErrorOperation.RENDER_QR ->
-            "Не удалось показать QR" to "Полученный код не удалось отобразить. Запросите новый."
+            UiText(R.string.error_render_qr_title) to UiText(R.string.error_render_qr_description)
 
         kind == FailureKind.INVALID_DATA && operation == ErrorOperation.IMPORT ->
-            "Данные импорта не подходят" to
-                "Ссылка повреждена или содержит неподдерживаемые данные. Получите новую ссылку."
+            UiText(R.string.error_import_data_title) to
+                UiText(R.string.error_import_data_description)
 
         kind == FailureKind.INVALID_DATA ->
-            "Неожиданный ответ сервиса" to
-                "Полученные данные не удалось обработать. Повторите попытку; при повторении скопируйте отчёт."
+            UiText(R.string.error_response_title) to
+                UiText(R.string.error_response_description)
 
         else ->
             when (operation) {
-                ErrorOperation.IMPORT -> "Не удалось импортировать профиль"
-                ErrorOperation.SETTINGS -> "Не удалось сохранить настройки"
-                ErrorOperation.DELETE -> "Не удалось удалить профиль"
-                ErrorOperation.MIGRATION -> "Не удалось обновить хранилище"
-                ErrorOperation.UNLOCK -> "Не удалось войти"
-                ErrorOperation.QR, ErrorOperation.RENDER_QR -> "Не удалось получить QR"
-                ErrorOperation.STARTUP -> "Не удалось открыть хранилище"
+                ErrorOperation.IMPORT -> UiText(R.string.error_import_title)
+                ErrorOperation.SETTINGS -> UiText(R.string.error_settings_title)
+                ErrorOperation.DELETE -> UiText(R.string.error_delete_title)
+                ErrorOperation.MIGRATION -> UiText(R.string.error_migration_title)
+                ErrorOperation.UNLOCK -> UiText(R.string.error_unlock_title)
+                ErrorOperation.QR, ErrorOperation.RENDER_QR -> UiText(R.string.error_qr_title)
+                ErrorOperation.STARTUP -> UiText(R.string.error_startup_title)
             } to
-                "Попробуйте ещё раз. Если ошибка повторится, скопируйте отчёт из подробностей."
+                UiText(R.string.error_generic_description)
     }
     val action = if (operation == ErrorOperation.IMPORT && kind == FailureKind.INVALID_DATA) {
         ErrorRecovery.EDIT_IMPORT
@@ -150,36 +153,39 @@ fun QrGenerationState.Failed.toPocketError(recovery: ErrorRecovery?): PocketErro
         diagnostic.reason in setOf(FailureReason.BIOMETRIC_KEY_INVALIDATED, FailureReason.STORAGE_KEY_MISSING)
     ) {
         return base.copy(
-            title = "Сохранённый PIN недоступен",
-            description = "Android сбросил его защиту. Введите PIN вручную, чтобы сохранить его заново.",
+            title = UiText(R.string.error_saved_pin_title),
+            description = UiText(R.string.error_saved_pin_description),
             recovery = null,
         )
     }
     if (stage == QrGenerationStage.SAVING_PIN) {
         val detail = (reason as? QrGenerationFailure.Authentication)?.reason?.message() ?: base.description
-        return base.copy(title = "Не удалось сохранить PIN", description = "$detail Можно войти без сохранения PIN.")
+        return base.copy(
+            title = UiText(R.string.error_save_pin_title),
+            description = UiText(R.string.error_save_pin_description, listOf(detail)),
+        )
     }
     return when (val failure = reason) {
         is QrGenerationFailure.Authentication -> base.copy(
-            title = "Биометрия недоступна",
+            title = UiText(R.string.error_biometric_title),
             description = failure.reason.message(),
         )
 
         QrGenerationFailure.AuthorizationRejected -> base.copy(
-            title = "PIN не принят",
-            description = "Проверьте PIN Digital ID. Следующая попытка будет доступна после паузы.",
+            title = UiText(R.string.error_pin_rejected_title),
+            description = UiText(R.string.error_pin_rejected_description),
             recovery = null,
         )
 
         QrGenerationFailure.InvalidPin -> base.copy(
-            title = "Проверьте PIN",
-            description = "PIN Digital ID должен содержать четыре цифры.",
+            title = UiText(R.string.error_pin_invalid_title),
+            description = UiText(R.string.error_pin_invalid_description),
             recovery = null,
         )
 
         QrGenerationFailure.AlreadyRunning -> base.copy(
-            title = "Вход уже выполняется",
-            description = "Дождитесь завершения текущего запроса.",
+            title = UiText(R.string.error_running_title),
+            description = UiText(R.string.error_running_description),
             recovery = null,
         )
 
@@ -187,25 +193,25 @@ fun QrGenerationState.Failed.toPocketError(recovery: ErrorRecovery?): PocketErro
 
         is QrGenerationFailure.Preflight -> when (failure.reason) {
             DigitalIdPreflightFailure.ATTEMPTS_EXHAUSTED -> base.copy(
-                title = "Попытки PIN исчерпаны",
-                description = "Digital ID не разрешает новые попытки. Проверьте доступ в приложении MAX.",
+                title = UiText(R.string.error_attempts_title),
+                description = UiText(R.string.error_attempts_description),
                 recovery = null,
             )
 
             DigitalIdPreflightFailure.COOLDOWN -> base.copy(
-                title = "Нужно подождать",
-                description = "Digital ID временно ограничил ввод PIN. Попробуйте позже.",
+                title = UiText(R.string.error_cooldown_title),
+                description = UiText(R.string.error_cooldown_description),
             )
 
             DigitalIdPreflightFailure.DEVICE_MISMATCH, DigitalIdPreflightFailure.TIMESTAMP_MISMATCH -> base.copy(
-                title = "Профиль изменился",
-                description = "Импортируйте свежую ссылку из Digital ID.",
+                title = UiText(R.string.error_profile_changed_title),
+                description = UiText(R.string.error_profile_changed_description),
                 recovery = ErrorRecovery.REPLACE,
             )
 
             DigitalIdPreflightFailure.PIN_SALT_MISSING, DigitalIdPreflightFailure.UNSUPPORTED_PROFILE -> base.copy(
-                title = "Профиль не поддерживает вход",
-                description = "В импорте нет подходящих данных Digital ID. Получите свежую ссылку.",
+                title = UiText(R.string.error_profile_unsupported_title),
+                description = UiText(R.string.error_profile_unsupported_description),
                 recovery = ErrorRecovery.REPLACE,
             )
         }

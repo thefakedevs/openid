@@ -19,11 +19,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.composables.icons.materialsymbols.rounded.R as Symbols
+import ru.lavafrai.openid.R
 import ru.lavafrai.openid.ui.PocketError
 import ru.lavafrai.openid.ui.PocketUiState
 import ru.lavafrai.openid.ui.components.InfoCard
@@ -33,6 +35,7 @@ import ru.lavafrai.openid.ui.components.PinErrorCard
 import ru.lavafrai.openid.ui.components.PinKeyboard
 import ru.lavafrai.openid.ui.components.PrimaryButton
 import ru.lavafrai.openid.ui.components.ScreenHeading
+import ru.lavafrai.openid.ui.resolve
 
 @Composable
 internal fun PinEntryContent(
@@ -52,7 +55,7 @@ internal fun PinEntryContent(
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 if (state.retrySeconds > 0) {
                     Text(
-                        "Повторная попытка через ${state.retrySeconds} с",
+                        stringResource(R.string.pin_retry_countdown, state.retrySeconds),
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -63,13 +66,13 @@ internal fun PinEntryContent(
                     PinErrorCard(error, { onRecoverError(error) }, enabled = canSubmit)
                 } else {
                     ScreenHeading(
-                        "Введите PIN Digital ID",
-                        "После проверки сохраним PIN с биометрией.".takeIf { state.willSavePin },
+                        stringResource(R.string.pin_enter_title),
+                        stringResource(R.string.pin_save_description).takeIf { state.willSavePin },
                     )
                 }
                 state.message?.let { message ->
                     InfoCard(
-                        message,
+                        message.resolve(),
                         modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                         icon = Symbols.drawable.materialsymbols_ic_info_rounded,
                     )
@@ -91,12 +94,12 @@ internal fun PinEntryContent(
                     keyMinHeight = if (compact) 56.dp else 64.dp,
                 )
                 PrimaryButton(
-                    if (state.willSavePin) "Сохранить PIN и открыть QR" else "Открыть QR",
+                    stringResource(if (state.willSavePin) R.string.pin_save_and_open else R.string.qr_open),
                     onSubmit,
                     enabled = canSubmit && state.pin.length == 4,
                     icon = Symbols.drawable.materialsymbols_ic_qr_code_2_rounded,
                 )
-                TextButton(onClick = onHelp, enabled = !state.busy) { Text("Какой PIN нужен?") }
+                TextButton(onClick = onHelp, enabled = !state.busy) { Text(stringResource(R.string.pin_help_action)) }
             }
         }
         if (scrollWholeScreen) {

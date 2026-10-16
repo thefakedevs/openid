@@ -22,20 +22,24 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.composables.icons.materialsymbols.rounded.R as Symbols
+import ru.lavafrai.openid.R
 import ru.lavafrai.openid.data.core.VaultAuthentication
 import ru.lavafrai.openid.data.core.VaultProtection
 import ru.lavafrai.openid.models.auth.AuthenticationFailure
 import ru.lavafrai.openid.models.pin.PinProtection
 import ru.lavafrai.openid.ui.message
+import ru.lavafrai.openid.ui.resolve
 
+@Composable
 fun PinProtection.label(): String = when (this) {
-    PinProtection.NOT_SAVED -> "Вводить PIN"
-    PinProtection.BIOMETRIC -> "По биометрии"
+    PinProtection.NOT_SAVED -> stringResource(R.string.pin_manual_label)
+    PinProtection.BIOMETRIC -> stringResource(R.string.pin_biometric_label)
 }
 
 @Composable
@@ -49,12 +53,12 @@ fun PinProtectionChoices(
         listOf(PinProtection.BIOMETRIC, PinProtection.NOT_SAVED).forEach { value ->
             val reason = if (value == PinProtection.BIOMETRIC) unavailable else null
             val description = when (value) {
-                PinProtection.NOT_SAVED -> "Четыре цифры при каждом входе. PIN не сохраняется."
+                PinProtection.NOT_SAVED -> stringResource(R.string.pin_manual_description)
 
                 PinProtection.BIOMETRIC ->
-                    "Сохранить PIN и открывать QR одним касанием."
+                    stringResource(R.string.pin_biometric_description)
             }
-            Choice(value, reason?.message() ?: description, value == selected, enabled && reason == null) {
+            Choice(value, reason?.message()?.resolve() ?: description, value == selected, enabled && reason == null) {
                 onSelect(value)
             }
         }

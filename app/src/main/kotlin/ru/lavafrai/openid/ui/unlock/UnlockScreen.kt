@@ -14,11 +14,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.composables.icons.materialsymbols.rounded.R as Symbols
+import ru.lavafrai.openid.R
 import ru.lavafrai.openid.models.pin.SavedPinState
 import ru.lavafrai.openid.ui.ErrorRecovery
 import ru.lavafrai.openid.ui.PocketError
@@ -27,6 +29,7 @@ import ru.lavafrai.openid.ui.components.ErrorCard
 import ru.lavafrai.openid.ui.components.InfoCard
 import ru.lavafrai.openid.ui.components.PrimaryButton
 import ru.lavafrai.openid.ui.components.ScreenHeading
+import ru.lavafrai.openid.ui.resolve
 
 @Composable
 fun UnlockScreen(
@@ -60,33 +63,38 @@ fun UnlockScreen(
             state.error?.let { error -> ErrorCard(error, { onRecoverError(error) }, enabled = canSubmit) }
             if (state.accountMigrationRequired) {
                 ScreenHeading(
-                    "Обновим защиту",
-                    "Подтвердите доступ к старому профилю один раз. После обновления биометрия потребуется только для PIN.",
+                    stringResource(R.string.migration_title),
+                    stringResource(R.string.migration_description),
                 )
-                PrimaryButton("Обновить хранилище", onMigrate, enabled = !state.busy)
+                PrimaryButton(stringResource(R.string.migration_action), onMigrate, enabled = !state.busy)
             } else {
                 if (state.error == null) {
                     ScreenHeading(
-                        "Вход",
-                        "PIN сохранён. Подтвердите биометрию, чтобы открыть QR.",
+                        stringResource(R.string.unlock_title),
+                        stringResource(R.string.unlock_description),
                     )
                 }
                 if (state.error?.recovery != ErrorRecovery.BIOMETRIC) {
                     PrimaryButton(
-                        "Войти по биометрии",
+                        stringResource(R.string.biometric_sign_in),
                         onSavedPin,
                         enabled = canSubmit,
                         icon = Symbols.drawable.materialsymbols_ic_fingerprint_rounded,
                     )
                 }
-                TextButton(onClick = { onManualEntryChange(true) }, enabled = !state.busy) { Text("Ввести PIN") }
+                TextButton(onClick = {
+                    onManualEntryChange(true)
+                }, enabled = !state.busy) { Text(stringResource(R.string.pin_enter_action)) }
                 if (state.retrySeconds > 0) {
-                    Text("Повторная попытка через ${state.retrySeconds} с", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        stringResource(R.string.pin_retry_countdown, state.retrySeconds),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
                 }
             }
             state.message?.let {
                 InfoCard(
-                    it,
+                    it.resolve(),
                     modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                     icon = Symbols.drawable.materialsymbols_ic_info_rounded,
                 )
@@ -96,12 +104,12 @@ fun UnlockScreen(
     if (showPinHelp) {
         AlertDialog(
             onDismissRequest = { showPinHelp = false },
-            title = { Text("PIN Digital ID") },
+            title = { Text(stringResource(R.string.pin_title)) },
             text = {
-                Text("Введите PIN, который вы используете для Digital ID. Код блокировки телефона сюда не подходит.")
+                Text(stringResource(R.string.pin_help_description))
             },
             confirmButton = {
-                TextButton(onClick = { showPinHelp = false }) { Text("Понятно") }
+                TextButton(onClick = { showPinHelp = false }) { Text(stringResource(R.string.action_understood)) }
             },
         )
     }

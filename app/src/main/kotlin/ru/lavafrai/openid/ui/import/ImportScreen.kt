@@ -25,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
@@ -33,6 +34,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.composables.icons.materialsymbols.rounded.R as Symbols
+import ru.lavafrai.openid.R
 import ru.lavafrai.openid.ui.ImportForm
 import ru.lavafrai.openid.ui.components.PocketIcon
 import ru.lavafrai.openid.ui.components.PrimaryButton
@@ -50,10 +52,10 @@ fun ImportScreen(
     var passwordVisible by remember { mutableStateOf(false) }
     val focus = LocalFocusManager.current
     val canContinue = !busy && form.link.isNotBlank() && form.password.isNotEmpty()
-    val description = "Введите ссылку импорта и пароль, с которым она была создана."
+    val description = stringResource(R.string.import_description)
     Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
         if (replacing) {
-            ScreenHeading("Новый профиль", description)
+            ScreenHeading(stringResource(R.string.profile_new), description)
         } else {
             PocketPass()
             Text(
@@ -67,8 +69,8 @@ fun ImportScreen(
                 value = form.link,
                 onValueChange = onLinkChange,
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("Ссылка импорта") },
-                placeholder = { Text("didpocket://import/…") },
+                label = { Text(stringResource(R.string.import_link_label)) },
+                placeholder = { Text(stringResource(R.string.import_link_hint)) },
                 leadingIcon = { PocketIcon(Symbols.drawable.materialsymbols_ic_link_rounded) },
                 shape = RoundedCornerShape(20.dp),
                 enabled = !busy,
@@ -80,7 +82,7 @@ fun ImportScreen(
                 value = form.password,
                 onValueChange = onPasswordChange,
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("Пароль ссылки") },
+                label = { Text(stringResource(R.string.import_password_label)) },
                 leadingIcon = { PocketIcon(Symbols.drawable.materialsymbols_ic_key_rounded) },
                 trailingIcon = {
                     IconButton(onClick = { passwordVisible = !passwordVisible }, enabled = !busy) {
@@ -90,7 +92,9 @@ fun ImportScreen(
                             } else {
                                 Symbols.drawable.materialsymbols_ic_visibility_rounded
                             },
-                            description = if (passwordVisible) "Скрыть пароль" else "Показать пароль",
+                            description = stringResource(
+                                if (passwordVisible) R.string.password_hide else R.string.password_show,
+                            ),
                         )
                     }
                 },
@@ -106,7 +110,7 @@ fun ImportScreen(
                 singleLine = true,
             )
         }
-        PrimaryButton("Продолжить", onNext, enabled = canContinue)
+        PrimaryButton(stringResource(R.string.action_continue), onNext, enabled = canContinue)
     }
 }
 
@@ -119,9 +123,9 @@ private fun PocketPass() {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.weight(1f)) {
-                Text("POCKET / ID", style = MaterialTheme.typography.labelLarge)
+                Text(stringResource(R.string.app_name), style = MaterialTheme.typography.labelLarge)
                 Text(
-                    "Добавить профиль",
+                    stringResource(R.string.profile_add),
                     style = MaterialTheme.typography.titleLarge,
                     modifier = Modifier.semantics { heading() },
                 )

@@ -1,6 +1,8 @@
 package ru.lavafrai.openid.ui
 
+import androidx.annotation.StringRes
 import javax.crypto.Cipher
+import ru.lavafrai.openid.R
 import ru.lavafrai.openid.domain.models.QrGenerationStage
 import ru.lavafrai.openid.models.account.AccountSummary
 import ru.lavafrai.openid.models.auth.AuthenticationFailure
@@ -18,9 +20,9 @@ data class ImportForm(
     override fun toString(): String = "ImportForm(<redacted>)"
 }
 
-enum class AuthKind(val title: String) {
-    LEGACY_PROFILE_MIGRATION("Обновите хранилище профиля"),
-    BIOMETRIC("Подтвердите доступ к PIN Digital ID"),
+enum class AuthKind(@StringRes val titleRes: Int) {
+    LEGACY_PROFILE_MIGRATION(R.string.auth_migration_title),
+    BIOMETRIC(R.string.auth_pin_title),
 }
 
 class AuthRequest(
@@ -30,7 +32,7 @@ class AuthRequest(
     override fun toString(): String = "AuthRequest(kind=$kind, cipher=<redacted>)"
 }
 
-class PocketNotice(val message: String)
+class PocketNotice(val message: UiText)
 
 data class PinSettingsState(
     val selection: PinProtection,
@@ -49,7 +51,7 @@ data class PocketUiState(
     val settings: PinSettingsState? = null,
     val pin: String = "",
     val screenBusy: Boolean = false,
-    val message: String? = null,
+    val message: UiText? = null,
     val notice: PocketNotice? = null,
     val screenError: PocketError? = null,
     val session: QrSessionUiState = QrSessionUiState(),

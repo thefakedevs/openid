@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import ru.lavafrai.openid.R
 import ru.lavafrai.openid.models.account.AccountState
 import ru.lavafrai.openid.models.auth.AuthenticationException
 import ru.lavafrai.openid.models.pin.PinProtection
@@ -124,7 +125,7 @@ class PocketController(
             is PocketAction.ConfirmAuth -> authentication.confirm(action.request)
 
             is PocketAction.CancelAuth -> if (state.value.authPrompt === action.request) {
-                mutableState.update { it.copy(message = "Подтверждение отменено. Можно повторить попытку.") }
+                mutableState.update { it.copy(message = UiText(R.string.notice_auth_cancelled)) }
                 authentication.cancel()
             }
 
@@ -226,7 +227,7 @@ class PocketController(
         val current = state.value
         if (current.busy) return
         if (current.importForm.link.isBlank() || current.importForm.password.isEmpty()) {
-            mutableState.update { it.copy(message = "Введите ссылку импорта и пароль ссылки.") }
+            mutableState.update { it.copy(message = UiText(R.string.notice_import_required)) }
             return
         }
         runOperation(ErrorOperation.IMPORT, ErrorRecovery.IMPORT) {
@@ -420,12 +421,12 @@ class PocketController(
                     notice = PocketNotice(
                         when {
                             current.pinProtection == PinProtection.NOT_SAVED ->
-                                "Включён вход по PIN. Сохранённый PIN удалён."
+                                UiText(R.string.notice_manual_enabled)
 
                             saved == null || it.replaceSavedPin ->
-                                "Введите PIN — после проверки сохраним его с биометрией."
+                                UiText(R.string.notice_pin_save_required)
 
-                            else -> "Включён вход по биометрии."
+                            else -> UiText(R.string.notice_biometric_enabled)
                         },
                     ),
                 )
@@ -629,7 +630,7 @@ class PocketController(
             mutableState.update {
                 it.copy(
                     accountMigrationRequired = false,
-                    message = "Профиль обновлён. Теперь подтверждение требуется только для сохранённого PIN.",
+                    message = UiText(R.string.notice_migration_complete),
                 )
             }
         }

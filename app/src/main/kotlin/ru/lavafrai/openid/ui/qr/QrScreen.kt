@@ -32,6 +32,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.keepScreenOn
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -86,7 +87,7 @@ fun QrScreen(
         modifier = if (error == null) Modifier.keepScreenOn() else Modifier,
         verticalArrangement = Arrangement.spacedBy(24.dp),
     ) {
-        ScreenHeading("Ваш QR")
+        ScreenHeading(stringResource(R.string.qr_title))
         if (error != null) {
             ErrorCard(error, { if (state.error != null) onRecoverError(error) else onRefresh() }, enabled = !state.busy)
         } else {
@@ -101,7 +102,7 @@ fun QrScreen(
                             R.drawable.materialsymbols_ic_verified_user_rounded,
                             tint = MaterialTheme.colorScheme.onPrimaryContainer,
                         )
-                        Text("DIGITAL ID", style = MaterialTheme.typography.labelLarge)
+                        Text(stringResource(R.string.qr_service_label), style = MaterialTheme.typography.labelLarge)
                     }
                     Surface(
                         shape = RoundedCornerShape(24.dp),
@@ -111,7 +112,7 @@ fun QrScreen(
                             if (painter != null) {
                                 Image(
                                     painter = painter,
-                                    contentDescription = "QR Digital ID для сканирования",
+                                    contentDescription = stringResource(R.string.qr_accessibility),
                                     modifier = Modifier.fillMaxWidth().aspectRatio(1f),
                                 )
                             } else {
@@ -132,7 +133,7 @@ fun QrScreen(
                                     }
                                     if (qr != null) {
                                         Text(
-                                            "Не удалось показать QR",
+                                            stringResource(R.string.error_render_qr_title),
                                             color = MaterialTheme.colorScheme.onSurface,
                                             style = MaterialTheme.typography.bodyMedium,
                                         )
@@ -154,7 +155,7 @@ fun QrScreen(
             ) {
                 PocketIcon(Symbols.drawable.materialsymbols_ic_refresh_rounded, tint = LocalContentColor.current)
                 Text(
-                    "Обновить QR",
+                    stringResource(R.string.qr_refresh),
                     modifier = Modifier.padding(start = 12.dp),
                     style = MaterialTheme.typography.titleMedium,
                 )
@@ -162,7 +163,7 @@ fun QrScreen(
         }
         TextButton(onClick = onLock, enabled = !state.busy, modifier = Modifier.fillMaxWidth()) {
             PocketIcon(Symbols.drawable.materialsymbols_ic_lock_rounded, tint = LocalContentColor.current)
-            Text("Завершить сеанс", modifier = Modifier.padding(start = 8.dp))
+            Text(stringResource(R.string.session_end), modifier = Modifier.padding(start = 8.dp))
         }
     }
 }
@@ -188,6 +189,7 @@ private fun QrRefreshCountdown(
     deadlineMillis: Long?,
     intervalMillis: Long,
 ) {
+    val countdownDescription = stringResource(R.string.qr_countdown_accessibility)
     fun remainingMillis(): Long = deadlineMillis?.let { (it - System.nanoTime() / 1_000_000).coerceAtLeast(0) } ?: 0
     val remaining by produceState(remainingMillis(), deadlineMillis) {
         do {
@@ -202,11 +204,15 @@ private fun QrRefreshCountdown(
     ) {
         LinearProgressIndicator(
             progress = { if (intervalMillis > 0) (remaining.toFloat() / intervalMillis).coerceIn(0f, 1f) else 0f },
-            modifier = Modifier.fillMaxWidth().height(4.dp).semantics { contentDescription = "До обновления QR" },
+            modifier = Modifier.fillMaxWidth().height(4.dp).semantics { contentDescription = countdownDescription },
             drawStopIndicator = {},
         )
         Text(
-            if (remaining > 0) "Обновление через ${(remaining + 999) / 1000} с" else "Обновляем QR…",
+            if (remaining > 0) {
+                stringResource(R.string.qr_refresh_countdown, (remaining + 999) / 1000)
+            } else {
+                stringResource(R.string.loading_qr_refresh)
+            },
             style = MaterialTheme.typography.labelMedium,
         )
     }

@@ -10,7 +10,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import ru.lavafrai.openid.R
 import ru.lavafrai.openid.domain.models.QrGenerationStage
 import ru.lavafrai.openid.navigation.PocketDestination
 import ru.lavafrai.openid.ui.PocketUiState
@@ -25,26 +27,27 @@ internal fun LoadingStatus(state: PocketUiState) {
         LoadingIndicator(Modifier.size(40.dp))
         Text(
             when (state.destination) {
-                PocketDestination.IMPORT -> "Проверяем ссылку…"
-                PocketDestination.SETUP -> "Импортируем профиль…"
-                PocketDestination.SETTINGS -> "Применяем настройки…"
-                else -> state.qrStage?.label() ?: "Подготавливаем вход…"
+                PocketDestination.IMPORT -> stringResource(R.string.loading_import_check)
+                PocketDestination.SETUP -> stringResource(R.string.loading_import_save)
+                PocketDestination.SETTINGS -> stringResource(R.string.loading_settings)
+                else -> state.qrStage?.label() ?: stringResource(R.string.loading_sign_in)
             },
             style = MaterialTheme.typography.bodyMedium,
         )
     }
 }
 
+@Composable
 private fun QrGenerationStage.label(): String = when (this) {
-    QrGenerationStage.UNLOCKING_ACCOUNT -> "Разблокируем профиль…"
-    QrGenerationStage.CONNECTING_MAX -> "Подключаемся…"
-    QrGenerationStage.LOGGING_IN -> "Входим в аккаунт…"
-    QrGenerationStage.RESOLVING_BOT -> "Находим Digital ID…"
-    QrGenerationStage.GETTING_LAUNCH -> "Открываем Digital ID…"
-    QrGenerationStage.CHECKING_SECURITY -> "Проверяем доступность авторизации…"
-    QrGenerationStage.GETTING_PIN -> "Получаем PIN…"
-    QrGenerationStage.AUTHORIZING -> "Проверяем PIN…"
-    QrGenerationStage.SAVING_PIN -> "Сохраняем PIN…"
-    QrGenerationStage.GENERATING_QR -> "Получаем QR…"
-    QrGenerationStage.REFRESHING_QR -> "Обновляем QR…"
+    QrGenerationStage.UNLOCKING_ACCOUNT -> stringResource(R.string.loading_account_unlock)
+    QrGenerationStage.CONNECTING_MAX -> stringResource(R.string.loading_connect)
+    QrGenerationStage.LOGGING_IN -> stringResource(R.string.loading_login)
+    QrGenerationStage.RESOLVING_BOT -> stringResource(R.string.loading_resolve_bot)
+    QrGenerationStage.GETTING_LAUNCH -> stringResource(R.string.loading_launch)
+    QrGenerationStage.CHECKING_SECURITY -> stringResource(R.string.loading_security)
+    QrGenerationStage.GETTING_PIN -> stringResource(R.string.loading_pin_read)
+    QrGenerationStage.AUTHORIZING -> stringResource(R.string.loading_authorize)
+    QrGenerationStage.SAVING_PIN -> stringResource(R.string.loading_pin_save)
+    QrGenerationStage.GENERATING_QR -> stringResource(R.string.loading_qr_generate)
+    QrGenerationStage.REFRESHING_QR -> stringResource(R.string.loading_qr_refresh)
 }

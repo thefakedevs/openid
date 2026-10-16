@@ -25,11 +25,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.composables.icons.materialsymbols.rounded.R as Symbols
+import ru.lavafrai.openid.R
 
 @Composable
 fun PocketIcon(
@@ -109,9 +111,16 @@ fun ProfileIdentity(accountId: Long?) {
             }
         }
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text("Личный профиль", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
             Text(
-                "ID ${accountId ?: "—"}",
+                stringResource(R.string.profile_identity),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                stringResource(
+                    R.string.profile_id,
+                    accountId?.toString() ?: stringResource(R.string.profile_id_unknown),
+                ),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

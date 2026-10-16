@@ -25,6 +25,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.password
@@ -32,13 +33,16 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.composables.icons.materialsymbols.rounded.R as Symbols
+import ru.lavafrai.openid.R
 
 @Composable
 fun PinDots(length: Int) {
+    val pinDescription = stringResource(R.string.pin_title)
+    val enteredDescription = stringResource(R.string.pin_digits_entered, length)
     Row(
         modifier = Modifier.fillMaxWidth().height(44.dp).clearAndSetSemantics {
-            contentDescription = "PIN Digital ID"
-            stateDescription = "Введено $length из 4 цифр"
+            contentDescription = pinDescription
+            stateDescription = enteredDescription
             password()
         },
         horizontalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterHorizontally),
@@ -91,7 +95,7 @@ fun PinKeyboard(
                     PinKey(Modifier.weight(1f).heightIn(min = keyMinHeight), enabled && value.length < 4, {
                         enter(digit)
                     }) {
-                        Text(digit.toString(), style = MaterialTheme.typography.headlineLarge)
+                        Text(stringResource(R.string.pin_digit, digit), style = MaterialTheme.typography.headlineLarge)
                     }
                 }
             }
@@ -101,7 +105,7 @@ fun PinKeyboard(
                 PinKey(Modifier.weight(1f).heightIn(min = keyMinHeight), enabled, onBiometric) {
                     PocketIcon(
                         Symbols.drawable.materialsymbols_ic_fingerprint_rounded,
-                        description = "Войти по биометрии",
+                        description = stringResource(R.string.biometric_sign_in),
                         tint = LocalContentColor.current,
                     )
                 }
@@ -109,7 +113,7 @@ fun PinKeyboard(
                 Spacer(Modifier.weight(1f))
             }
             PinKey(Modifier.weight(1f).heightIn(min = keyMinHeight), enabled && value.length < 4, { enter(0) }) {
-                Text("0", style = MaterialTheme.typography.headlineLarge)
+                Text(stringResource(R.string.pin_digit, 0), style = MaterialTheme.typography.headlineLarge)
             }
             PinKey(Modifier.weight(1f).heightIn(min = keyMinHeight), enabled && value.isNotEmpty(), {
                 haptics.performHapticFeedback(HapticFeedbackType.KeyboardTap)
@@ -117,7 +121,7 @@ fun PinKeyboard(
             }) {
                 PocketIcon(
                     Symbols.drawable.materialsymbols_ic_backspace_rounded,
-                    description = "Удалить последнюю цифру",
+                    description = stringResource(R.string.pin_delete_digit),
                     tint = LocalContentColor.current,
                 )
             }

@@ -43,6 +43,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
@@ -107,19 +108,21 @@ fun PocketApp(viewModel: PocketViewModel) {
             icon = {
                 PocketIcon(Symbols.drawable.materialsymbols_ic_delete_rounded, tint = MaterialTheme.colorScheme.error)
             },
-            title = { Text("Удалить профиль?") },
+            title = { Text(stringResource(R.string.delete_profile_title)) },
             text = {
                 Text(
-                    "Профиль и сохранённый PIN будут удалены с этого телефона. Для возвращения понадобятся ссылка импорта и её пароль.",
+                    stringResource(R.string.delete_profile_description),
                 )
             },
             confirmButton = {
                 TextButton(onClick = {
                     controller.dispatch(PocketAction.ConfirmDelete)
-                }) { Text("Удалить", color = MaterialTheme.colorScheme.error) }
+                }) { Text(stringResource(R.string.action_delete), color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = {
-                TextButton(onClick = { controller.dispatch(PocketAction.DismissDelete) }) { Text("Отмена") }
+                TextButton(onClick = {
+                    controller.dispatch(PocketAction.DismissDelete)
+                }) { Text(stringResource(R.string.action_cancel)) }
             },
         )
     } else {
@@ -140,10 +143,11 @@ internal fun PocketContent(
     val alignUnlockToBottom = state.destination == PocketDestination.UNLOCK && !state.accountMigrationRequired
     val pinEntry = alignUnlockToBottom && manualPinEntry
     val snackbarHostState = remember { SnackbarHostState() }
-    LaunchedEffect(state.notice) {
+    val noticeMessage = state.notice?.message?.resolve()
+    LaunchedEffect(state.notice, noticeMessage) {
         state.notice?.let { notice ->
             snackbarHostState.showSnackbar(
-                message = notice.message,
+                message = noticeMessage ?: return@let,
                 withDismissAction = true,
                 duration = SnackbarDuration.Long,
             )
@@ -190,7 +194,7 @@ internal fun PocketContent(
                     }
                     state.message?.takeUnless { state.destination == PocketDestination.UNLOCK }?.let { message ->
                         InfoCard(
-                            message,
+                            message.resolve(),
                             modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                             icon = Symbols.drawable.materialsymbols_ic_info_rounded,
                         )
@@ -218,7 +222,10 @@ private fun PocketTopBar(
         if (state.destination != PocketDestination.QR) {
             if (state.hasBack) {
                 IconButton(onClick = { dispatch(PocketAction.Back(state.destination)) }, enabled = !state.busy) {
-                    PocketIcon(R.drawable.materialsymbols_ic_arrow_back_rounded, description = "Назад")
+                    PocketIcon(
+                        R.drawable.materialsymbols_ic_arrow_back_rounded,
+                        description = stringResource(R.string.action_back),
+                    )
                 }
             } else {
                 Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.primary) {
@@ -232,7 +239,9 @@ private fun PocketTopBar(
             }
         }
         Text(
-            if (state.destination == PocketDestination.SETTINGS) "Настройки" else "pocket id",
+            stringResource(
+                if (state.destination == PocketDestination.SETTINGS) R.string.settings_title else R.string.app_name,
+            ),
             style = MaterialTheme.typography.titleLarge,
             modifier = Modifier.weight(1f),
         )
@@ -242,7 +251,11 @@ private fun PocketTopBar(
                 color = MaterialTheme.colorScheme.surfaceContainerHigh,
             ) {
                 Text(
-                    if (state.destination == PocketDestination.IMPORT) "01 / 02" else "02 / 02",
+                    stringResource(
+                        R.string.import_step,
+                        if (state.destination == PocketDestination.IMPORT) 1 else 2,
+                        2,
+                    ),
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
                     style = MaterialTheme.typography.labelMedium,
                 )
@@ -258,7 +271,10 @@ private fun PocketTopBar(
             PocketDestination.QR -> IconButton(onClick = {
                 dispatch(PocketAction.OpenSettings)
             }, enabled = !state.busy) {
-                PocketIcon(Symbols.drawable.materialsymbols_ic_settings_rounded, description = "Настройки")
+                PocketIcon(
+                    Symbols.drawable.materialsymbols_ic_settings_rounded,
+                    description = stringResource(R.string.settings_title),
+                )
             }
 
             else -> Unit

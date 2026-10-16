@@ -1,5 +1,6 @@
 package ru.lavafrai.openid.models.pin
 
+import ru.lavafrai.openid.models.errors.FailureDiagnostic
 enum class PinProtection {
     NOT_SAVED,
     BIOMETRIC,
@@ -8,7 +9,7 @@ enum class PinProtection {
 sealed interface SavedPinState {
     data object Loading : SavedPinState
 
-    data object Unavailable : SavedPinState
+    data class Unavailable(val diagnostic: FailureDiagnostic) : SavedPinState
 
     data object NotSaved : SavedPinState
 

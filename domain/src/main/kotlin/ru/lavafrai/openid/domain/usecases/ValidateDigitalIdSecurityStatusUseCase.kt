@@ -14,7 +14,7 @@ enum class DigitalIdPreflightFailure {
 
 class DigitalIdPreflightException(val reason: DigitalIdPreflightFailure) : IllegalStateException(reason.name)
 
-/** Run before requesting the PIN or sending an authorization attempt. */
+/** Run before requesting a manual PIN or sending an authorization attempt. */
 class ValidateDigitalIdSecurityStatusUseCase {
     operator fun invoke(
         account: ImportedDigitalId,

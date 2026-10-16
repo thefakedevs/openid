@@ -32,7 +32,7 @@ object AccountCodec {
         )
         val pinSalt = optionalString(digitalIdJson["pinSalt"], 4096)
         val biometricToken = optionalString(digitalIdJson["biometricToken"], 32768)
-        requireData(pinSalt != null || biometricToken != null, "DID_PIN_SALT_OR_TOKEN_MISSING")
+        requireData(pinSalt != null, "DID_PIN_SALT_MISSING")
 
         val webUserAgent = requireNonEmptyString(accountJson["webUserAgent"], 4096)
         requireData(webUserAgent.all { it.code in 32..126 }, "WEB_USER_AGENT_INVALID")

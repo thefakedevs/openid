@@ -73,8 +73,8 @@ internal object MaxWire {
             }
         } catch (failure: DataException) {
             throw failure
-        } catch (_: Exception) {
-            throw DataException("TCP_RESPONSE_DECODE_FAILED")
+        } catch (failure: Exception) {
+            throw DataException("TCP_RESPONSE_DECODE_FAILED", failure)
         }
     }
 

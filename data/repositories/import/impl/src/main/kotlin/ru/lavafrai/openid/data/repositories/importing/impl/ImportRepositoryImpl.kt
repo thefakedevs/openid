@@ -17,6 +17,7 @@ import ru.lavafrai.openid.data.core.StrictJson
 import ru.lavafrai.openid.data.core.requireData
 import ru.lavafrai.openid.data.repositories.importing.api.ImportRepository
 import ru.lavafrai.openid.models.account.ImportedAccount
+import ru.lavafrai.openid.models.errors.FailureReason
 
 class ImportRepositoryImpl : ImportRepository {
     override suspend fun decode(
@@ -27,13 +28,13 @@ class ImportRepositoryImpl : ImportRepository {
             url.startsWith(PREFIX) && url.length <= MAX_SIZE && url.all {
                 it.code in 33..126
             },
-            "IMPORT_URL_INVALID",
+            FailureReason.INVALID_IMPORT_LINK,
         )
         requireData(
             password.size in 12..256 && password.all {
                 it.code in 32..126
             },
-            "PASSPHRASE_MUST_BE_ASCII_12_TO_256",
+            FailureReason.INVALID_IMPORT_PASSWORD,
         )
         val envelopeBytes = decodeBase64Url(url.substring(PREFIX.length))
         val envelope = try {
@@ -67,8 +68,8 @@ class ImportRepositoryImpl : ImportRepository {
             cipher.updateAAD("didpocket-import-v1".toByteArray(Charsets.US_ASCII))
             plaintext = try {
                 cipher.doFinal(ciphertext)
-            } catch (_: AEADBadTagException) {
-                throw DataException("WRONG_PASSPHRASE_OR_DAMAGED_LINK")
+            } catch (failure: AEADBadTagException) {
+                throw DataException(FailureReason.IMPORT_DECRYPTION_FAILED, failure)
             }
             currentCoroutineContext().ensureActive()
             val payload = StrictJson.obj(StrictJson.parse(plaintext))

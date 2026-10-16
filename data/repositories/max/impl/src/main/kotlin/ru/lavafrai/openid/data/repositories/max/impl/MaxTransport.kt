@@ -131,9 +131,9 @@ internal class MaxTcpTransport(
             } catch (failure: DataException) {
                 currentCoroutineContext().ensureActive()
                 throw failure
-            } catch (_: Exception) {
+            } catch (failure: Exception) {
                 currentCoroutineContext().ensureActive()
-                throw DataException("MAX_TCP_CONNECTION_FAILED")
+                throw DataException("MAX_TCP_CONNECTION_FAILED", failure)
             }
         }
         try {

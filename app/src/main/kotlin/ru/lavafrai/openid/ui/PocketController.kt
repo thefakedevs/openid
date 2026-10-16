@@ -1,13 +1,9 @@
 package ru.lavafrai.openid.ui
 
-import kotlin.math.ceil
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -15,13 +11,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import ru.lavafrai.openid.data.core.DataException
-import ru.lavafrai.openid.domain.models.QrGenerationFailure
-import ru.lavafrai.openid.domain.models.QrGenerationState
-import ru.lavafrai.openid.domain.usecases.DigitalIdPreflightFailure
 import ru.lavafrai.openid.models.account.AccountState
 import ru.lavafrai.openid.models.auth.AuthenticationException
-import ru.lavafrai.openid.models.auth.CryptoAuthenticator
 import ru.lavafrai.openid.models.pin.PinProtection
 import ru.lavafrai.openid.models.pin.PinSource
 import ru.lavafrai.openid.models.pin.SavedPinState
@@ -33,20 +24,50 @@ class PocketController(
     private val actions: PocketActions,
     private val scope: CoroutineScope,
     private val pinPreferences: PinProtectionPreferences,
-    private val nowMillis: () -> Long = { System.nanoTime() / 1_000_000 },
+    nowMillis: () -> Long = { System.nanoTime() / 1_000_000 },
 ) {
     private val mutableState = MutableStateFlow(PocketUiState())
     val state: StateFlow<PocketUiState> = mutableState.asStateFlow()
-    private var draft: ImportDraft? = null
+    private var replacementSettings: ReplacementSettings? = null
     private var observer: Job? = null
-    private var operation: Job? = null
-    private var operationVersion = 0
-    private var qrJob: Job? = null
-    private var qrVersion = 0
-    private var pendingAuth: CompletableDeferred<Unit>? = null
-    private var timer: Job? = null
-    private var failedAttempts = 0
-    private var retryAtMillis = 0L
+    private var foreground = true
+    private var disposed = false
+    private val authentication = AuthenticationCoordinator { prompt ->
+        mutableState.update { it.copy(authPrompt = prompt) }
+    }
+    private val attempts = PinAttemptLimiter(scope, nowMillis) { seconds ->
+        mutableState.update { it.copy(retrySeconds = seconds) }
+    }
+    private val imports = ImportFlow(actions.importAccount, actions.replaceAccount, scope, nowMillis, ::expireImport)
+    private val operations = ScreenOperations(
+        scope = scope,
+        onStarted = {
+            mutableState.update { it.copy(screenBusy = true, message = null, notice = null, screenError = null) }
+        },
+        onFailure = { error -> mutableState.update { it.copy(screenError = error) } },
+        onFinished = {
+            mutableState.update { it.copy(screenBusy = false) }
+            if (!foreground && !disposed && state.value.editingImport) imports.onBackground()
+        },
+    )
+    private val qrSession = QrSessionController(
+        actions.generateQr,
+        scope,
+        nowMillis,
+        ::onSessionChanged,
+        attempts::rejected,
+    ) { result, source, repair ->
+        when {
+            result.canRetryInSession -> ErrorRecovery.QR
+
+            state.value.editingImport || state.value.destination in
+                setOf(PocketDestination.QR, PocketDestination.SETTINGS) -> ErrorRecovery.UNLOCK
+
+            source is PinSource.Saved && !repair && !state.value.replaceSavedPin -> ErrorRecovery.BIOMETRIC
+
+            else -> null
+        }
+    }
 
     init {
         observeStorage()
@@ -66,11 +87,7 @@ class PocketController(
 
             PocketAction.MigrateAccountStorage -> migrateAccountStorage()
 
-            is PocketAction.SelectPinProtection -> if (!state.value.busy) {
-                mutableState.update {
-                    it.copy(pinProtection = action.value)
-                }
-            }
+            is PocketAction.SelectPinProtection -> selectPinProtection(action.value)
 
             PocketAction.ContinueImport -> continueImport()
 
@@ -82,9 +99,19 @@ class PocketController(
 
             PocketAction.UseSavedPin -> useSavedPin()
 
+            PocketAction.AutoUnlock -> autoUnlock()
+
+            PocketAction.RefreshQr -> refreshQr()
+
+            is PocketAction.RecoverError -> recoverError(action.error)
+
             PocketAction.OpenSettings -> openSettings()
 
             PocketAction.ApplySettings -> applySettings()
+
+            is PocketAction.DismissNotice -> mutableState.update {
+                if (it.notice === action.notice) it.copy(notice = null) else it
+            }
 
             PocketAction.ReplaceAccount -> if (!state.value.busy) beginImport(ImportMode.REPLACE)
 
@@ -94,18 +121,20 @@ class PocketController(
 
             PocketAction.DismissDelete -> mutableState.update { it.copy(confirmDelete = false) }
 
-            is PocketAction.ConfirmAuth -> if (state.value.authPrompt === action.request) pendingAuth?.complete(Unit)
+            is PocketAction.ConfirmAuth -> authentication.confirm(action.request)
 
             is PocketAction.CancelAuth -> if (state.value.authPrompt === action.request) {
                 mutableState.update { it.copy(message = "Подтверждение отменено. Можно повторить попытку.") }
-                pendingAuth?.cancel()
+                authentication.cancel()
             }
 
             is PocketAction.AuthFailed -> if (state.value.authPrompt === action.request) {
-                pendingAuth?.completeExceptionally(AuthenticationException(action.reason))
+                authentication.fail(action.request, AuthenticationException(action.reason, details = action.diagnostic))
             }
 
-            PocketAction.Back -> back()
+            is PocketAction.Back -> if (state.value.destination == action.from) back()
+
+            PocketAction.EndSession -> endSession()
 
             PocketAction.RetryStartup -> observeStorage()
         }
@@ -113,17 +142,27 @@ class PocketController(
 
     private fun observeStorage() {
         observer?.cancel()
-        mutableState.update { it.copy(message = null) }
+        mutableState.update { it.copy(message = null, screenError = null) }
         observer = scope.launch {
             try {
                 combine(actions.accountState(), actions.savedPinState()) { account, pin -> account to pin }
                     .collect { (account, pin) ->
-                        if (account == AccountState.Unavailable || pin == SavedPinState.Unavailable) {
+                        val unavailable = (account as? AccountState.Unavailable)?.diagnostic
+                            ?: (pin as? SavedPinState.Unavailable)?.diagnostic
+                        if (unavailable != null) {
+                            qrSession.stop()
+                            authentication.cancel()
                             mutableState.update {
                                 it.copy(
                                     destination = PocketDestination.START,
-                                    message = "Не удалось открыть хранилище. Повторите попытку.",
-                                    busy = false,
+                                    screenError = unavailable.toPocketError(
+                                        ErrorOperation.STARTUP,
+                                        ErrorRecovery.STARTUP,
+                                    ),
+                                    message = null,
+                                    authPrompt = null,
+                                    autoUnlockPending = false,
+                                    screenBusy = false,
                                 )
                             }
                             return@collect
@@ -151,7 +190,8 @@ class PocketController(
                                     } else {
                                         PocketDestination.UNLOCK
                                     },
-                                    pinProtection = effectivePinProtection(),
+                                    unlockPinProtection = effectivePinProtection(),
+                                    autoUnlockPending = true,
                                 )
                             }
                         } else if (summary == null &&
@@ -161,14 +201,25 @@ class PocketController(
                         }
                     }
             } catch (failure: Throwable) {
-                if (failure is CancellationException) throw failure
-                mutableState.update { it.copy(message = actionError(failure), busy = false) }
+                if (failure is CancellationException || failure is Error) throw failure
+                qrSession.stop()
+                mutableState.update {
+                    it.copy(
+                        destination = PocketDestination.START,
+                        screenError = failure.toPocketError(ErrorOperation.STARTUP, ErrorRecovery.STARTUP),
+                        screenBusy = false,
+                    )
+                }
             }
         }
     }
 
     private fun editForm(change: (ImportForm) -> ImportForm) {
-        if (!state.value.busy) mutableState.update { it.copy(importForm = change(it.importForm), message = null) }
+        if (!state.value.busy) {
+            mutableState.update {
+                it.copy(importForm = change(it.importForm), message = null, screenError = null)
+            }
+        }
     }
 
     private fun continueImport() {
@@ -178,51 +229,42 @@ class PocketController(
             mutableState.update { it.copy(message = "Введите ссылку импорта и пароль ссылки.") }
             return
         }
-        clearDraft()
-        draft = ImportDraft(current.importForm.link.trim(), current.importForm.password.toCharArray())
-        mutableState.update {
-            it.copy(
-                destination = PocketDestination.SETUP,
-                importForm = ImportForm(),
-                pinProtection = PinProtection.NOT_SAVED,
-                message = null,
-            )
+        runOperation(ErrorOperation.IMPORT, ErrorRecovery.IMPORT) {
+            imports.prepare(current.importForm)
+            mutableState.update {
+                it.copy(
+                    destination = PocketDestination.SETUP,
+                    importForm = ImportForm(),
+                    setupPinProtection = PinProtection.NOT_SAVED,
+                    message = null,
+                    screenError = null,
+                )
+            }
         }
     }
 
     private fun commitImport() {
         val current = state.value
-        val imported = draft ?: return
-        runOperation {
-            val password = imported.password.copyOf()
-            try {
-                val summary = if (current.importMode == ImportMode.REPLACE) {
-                    actions.replaceAccount(imported.link, password)
-                } else {
-                    actions.importAccount(imported.link, password)
-                }
-                currentCoroutineContext().ensureActive()
-                pinPreferences.save(summary.accountId, current.pinProtection)
-                resetAttempts()
-                clearDraft()
-                mutableState.update {
-                    it.copy(
-                        destination = PocketDestination.UNLOCK,
-                        account = summary,
-                        accountMigrationRequired = false,
-                        importForm = ImportForm(),
-                        pin = "",
-                        qr = null,
-                        qrStage = null,
-                        message = if (current.pinProtection == PinProtection.NOT_SAVED) {
-                            null
-                        } else {
-                            "PIN сохранится после успешной авторизации."
-                        },
-                    )
-                }
-            } finally {
-                password.fill('\u0000')
+        val imported = imports.prepared ?: return
+        runOperation(ErrorOperation.IMPORT, ErrorRecovery.IMPORT, durable = true) {
+            // Only the explicit save ends the previous session and permits replacing storage.
+            replacementSettings = null
+            qrSession.stopAndWait()
+            val summary = imports.commit(imported, current.importMode)
+            currentCoroutineContext().ensureActive()
+            pinPreferences.save(summary.accountId, current.pinProtection)
+            attempts.reset()
+            imports.clear()
+            mutableState.update {
+                it.copy(
+                    destination = PocketDestination.UNLOCK,
+                    account = summary,
+                    accountMigrationRequired = false,
+                    unlockPinProtection = current.pinProtection,
+                    importForm = ImportForm(),
+                    pin = "",
+                    message = null,
+                )
             }
         }
     }
@@ -237,7 +279,10 @@ class PocketController(
                 checkNotNull(buffer).also { buffer = null }
             },
             saveAfterVerification =
-                save && (current.savedPin as? SavedPinState.Saved)?.accountId != current.account?.accountId,
+                save && (
+                    current.replaceSavedPin ||
+                        (current.savedPin as? SavedPinState.Saved)?.accountId != current.account?.accountId
+                    ),
             dispose = {
                 buffer?.fill('\u0000')
                 buffer = null
@@ -246,15 +291,36 @@ class PocketController(
     }
 
     private fun useSavedPin() {
-        if (!canSubmit()) return
+        if (!canSubmit() || state.value.replaceSavedPin) return
         val saved = state.value.savedPin as? SavedPinState.Saved ?: return
         if (saved.accountId != state.value.account?.accountId) return
-        startQr(PinSource.Saved(authenticator(AuthKind.BIOMETRIC)), false)
+        startQr(PinSource.Saved(authentication.authenticator(AuthKind.BIOMETRIC)), false)
+    }
+
+    private fun autoUnlock() {
+        val current = state.value
+        if (current.destination != PocketDestination.UNLOCK || !current.autoUnlockPending || current.busy) return
+        // Consume once per visit, including cancellation, failure, manual entry and a running PIN cooldown.
+        mutableState.update { it.copy(autoUnlockPending = false) }
+        if (current.message != null || current.error != null || current.confirmDelete ||
+            current.pin.isNotEmpty()
+        ) {
+            return
+        }
+        useSavedPin()
+    }
+
+    private fun refreshQr() {
+        val current = state.value
+        if (current.destination == PocketDestination.QR && !current.busy &&
+            (current.qr != null || current.error?.recovery == ErrorRecovery.QR)
+        ) {
+            qrSession.refresh()
+        }
     }
 
     private fun canSubmit(): Boolean =
-        !state.value.busy && !state.value.accountMigrationRequired && state.value.account != null &&
-            nowMillis() >= retryAtMillis
+        !state.value.busy && !state.value.accountMigrationRequired && state.value.account != null && attempts.canAttempt
 
     private fun startQr(
         source: PinSource,
@@ -262,77 +328,64 @@ class PocketController(
         dispose: () -> Unit = {},
     ) {
         if (state.value.account == null || state.value.accountMigrationRequired) return
-        val version = ++qrVersion
-        val previous = qrJob
-        mutableState.update { it.copy(busy = true, message = null, qr = null, qrStage = null) }
-        qrJob = scope.launch {
-            try {
-                previous?.cancelAndJoin()
-                actions.generateQr(
-                    pinSource = source,
-                    onPinVerified = { verified ->
-                        resetAttempts()
-                        val policy = effectivePinProtection()
-                        if (saveAfterVerification && policy != PinProtection.NOT_SAVED) {
-                            actions.savePin(verified, authenticator(AuthKind.BIOMETRIC))
-                        }
-                    },
-                ).collect { result ->
-                    if (version != qrVersion) return@collect
-                    when (result) {
-                        is QrGenerationState.Loading -> mutableState.update {
-                            it.copy(qrStage = result.stage, qr = null)
-                        }
+        mutableState.update { it.copy(message = null, screenError = null, autoUnlockPending = false) }
+        qrSession.start(source, onPinVerified = { verified ->
+            attempts.reset()
+            if (saveAfterVerification && effectivePinProtection() != PinProtection.NOT_SAVED) {
+                actions.savePin(verified, authentication.authenticator(AuthKind.BIOMETRIC))
+                mutableState.update { it.copy(replaceSavedPin = false) }
+            }
+        }, dispose = dispose)
+    }
 
-                        is QrGenerationState.Ready -> mutableState.update {
-                            it.copy(
-                                destination = if (it.destination == PocketDestination.SETTINGS) {
-                                    it.destination
-                                } else {
-                                    PocketDestination.QR
-                                },
-                                qr = result.qr,
-                                qrStage = null,
-                                busy = false,
-                                message = null,
-                            )
-                        }
+    private fun onSessionChanged(session: QrSessionUiState) {
+        mutableState.update {
+            val completed = session.qr != null || session.error != null
+            val destination = when {
+                it.editingImport || it.destination == PocketDestination.SETTINGS -> it.destination
+                session.qr != null || session.error?.recovery == ErrorRecovery.QR -> PocketDestination.QR
+                session.error != null && it.destination != PocketDestination.QR -> PocketDestination.UNLOCK
+                else -> it.destination
+            }
+            it.copy(
+                session = session,
+                destination = destination,
+                replaceSavedPin = it.replaceSavedPin || session.requiresPinReplacement,
+                screenError = if (completed && !it.editingImport) null else it.screenError,
+                message = if (completed && !it.editingImport) null else it.message,
+            )
+        }
+    }
 
-                        is QrGenerationState.Failed -> {
-                            if (result.reason == QrGenerationFailure.AuthorizationRejected) startCooldown()
-                            mutableState.update {
-                                it.copy(
-                                    destination = if (it.destination == PocketDestination.SETTINGS) {
-                                        it.destination
-                                    } else {
-                                        PocketDestination.UNLOCK
-                                    },
-                                    qr = null,
-                                    qrStage = null,
-                                    busy = false,
-                                    message = qrError(result.reason),
-                                )
-                            }
-                        }
+    private fun selectPinProtection(protection: PinProtection) {
+        if (state.value.busy) return
+        mutableState.update {
+            when (it.destination) {
+                PocketDestination.SETUP -> it.copy(setupPinProtection = protection)
+
+                PocketDestination.SETTINGS -> {
+                    val updated = it.copy(settings = it.settings?.copy(selection = protection))
+                    val error = updated.screenError
+                    if (!updated.hasSettingsChanges && error?.recovery == ErrorRecovery.SETTINGS) {
+                        updated.copy(screenError = error.copy(recovery = ErrorRecovery.UNLOCK))
+                    } else {
+                        updated
                     }
                 }
-            } catch (failure: Throwable) {
-                if (failure is CancellationException) throw failure
-                if (version == qrVersion) mutableState.update { it.copy(message = actionError(failure)) }
-            } finally {
-                dispose()
-                if (version == qrVersion) mutableState.update { it.copy(busy = false, qr = null, qrStage = null) }
+
+                else -> it
             }
         }
     }
 
     private fun openSettings() {
         if (state.value.busy || state.value.destination != PocketDestination.QR) return
+        val protection = effectivePinProtection()
         // Settings is inside the active QR session. Back resumes displaying it without another login.
         mutableState.update {
             it.copy(
                 destination = PocketDestination.SETTINGS,
-                pinProtection = effectivePinProtection(),
+                settings = PinSettingsState(protection, protection),
                 message = null,
             )
         }
@@ -340,9 +393,10 @@ class PocketController(
 
     private fun applySettings() {
         val current = state.value
+        if (!current.hasSettingsChanges) return
         val account = current.account ?: return
-        runOperation {
-            stopQrAndWait()
+        runOperation(ErrorOperation.SETTINGS, ErrorRecovery.SETTINGS) {
+            qrSession.stopAndWait()
             val saved = (current.savedPin as? SavedPinState.Saved)?.takeIf { it.accountId == account.accountId }
             if (current.pinProtection == PinProtection.NOT_SAVED) {
                 actions.deleteSavedPin(account.accountId)
@@ -351,50 +405,76 @@ class PocketController(
             pinPreferences.save(account.accountId, current.pinProtection)
             mutableState.update {
                 it.copy(
-                    message = if (saved == null && current.pinProtection != PinProtection.NOT_SAVED) {
-                        "Настройки применены. Введите PIN, чтобы сохранить его."
+                    destination = PocketDestination.UNLOCK,
+                    settings = null,
+                    unlockPinProtection = current.pinProtection,
+                    savedPin = if (current.pinProtection == PinProtection.NOT_SAVED) {
+                        SavedPinState.NotSaved
                     } else {
-                        "Настройки применены. Для QR снова подтвердите PIN."
+                        it.savedPin
                     },
+                    pin = "",
+                    replaceSavedPin = it.replaceSavedPin && current.pinProtection == PinProtection.BIOMETRIC,
+                    autoUnlockPending = current.pinProtection == PinProtection.BIOMETRIC &&
+                        saved != null && !it.replaceSavedPin,
+                    notice = PocketNotice(
+                        when {
+                            current.pinProtection == PinProtection.NOT_SAVED ->
+                                "Включён вход по PIN. Сохранённый PIN удалён."
+
+                            saved == null || it.replaceSavedPin ->
+                                "Введите PIN — после проверки сохраним его с биометрией."
+
+                            else -> "Включён вход по биометрии."
+                        },
+                    ),
                 )
             }
         }
     }
 
     private fun beginImport(mode: ImportMode) {
-        stopQr()
-        clearDraft()
+        val current = state.value
+        replacementSettings = if (mode == ImportMode.REPLACE && current.destination == PocketDestination.SETTINGS) {
+            ReplacementSettings(checkNotNull(current.settings), current.replaceSavedPin)
+        } else {
+            null
+        }
+        val preserveSession = replacementSettings != null
+        if (!preserveSession) qrSession.stop()
+        imports.clear()
         mutableState.update {
             it.copy(
                 destination = PocketDestination.IMPORT,
+                settings = null,
                 importMode = mode,
+                notice = null,
+                replaceSavedPin = false,
                 importForm = ImportForm(),
                 pin = "",
-                qr = null,
-                qrStage = null,
-                busy = false,
-                message = null,
+                screenBusy = false,
+                message = null, screenError = null,
                 confirmDelete = false,
             )
         }
     }
 
     private fun askDelete() {
-        if (operation?.isCompleted == false) return
-        stopQr()
-        pendingAuth?.cancel()
-        mutableState.update { it.copy(confirmDelete = true, pin = "", busy = false, qr = null, qrStage = null) }
+        if (state.value.busy || operations.active) return
+        mutableState.update {
+            it.copy(confirmDelete = true, pin = "", autoUnlockPending = false)
+        }
     }
 
     private fun deleteAccount() {
         if (!state.value.confirmDelete) return
         mutableState.update { it.copy(confirmDelete = false) }
-        runOperation {
-            stopQrAndWait()
+        runOperation(ErrorOperation.DELETE, ErrorRecovery.DELETE) {
+            qrSession.stopAndWait()
             actions.deleteAccount()
             currentCoroutineContext().ensureActive()
             pinPreferences.clear()
-            resetAttempts()
+            attempts.reset()
             beginImport(ImportMode.NEW)
         }
     }
@@ -403,31 +483,53 @@ class PocketController(
         if (state.value.busy) return
         when (state.value.destination) {
             PocketDestination.SETUP -> {
-                val form = draft?.let { ImportForm(it.link, it.password.concatToString()) } ?: ImportForm()
-                clearDraft()
+                val form = imports.restoreForm()
+                imports.clear()
                 mutableState.update {
-                    it.copy(destination = PocketDestination.IMPORT, importForm = form, message = null)
+                    it.copy(
+                        destination = PocketDestination.IMPORT,
+                        importForm = form,
+                        message = null,
+                        screenError = null,
+                    )
                 }
             }
 
             PocketDestination.IMPORT -> if (state.value.importMode == ImportMode.REPLACE) {
-                clearDraft()
+                val settings = replacementSettings
+                replacementSettings = null
+                imports.clear()
                 mutableState.update {
-                    it.copy(destination = PocketDestination.UNLOCK, importForm = ImportForm(), message = null)
+                    it.copy(
+                        destination = if (settings != null) PocketDestination.SETTINGS else PocketDestination.UNLOCK,
+                        importMode = ImportMode.NEW,
+                        importForm = ImportForm(),
+                        unlockPinProtection = effectivePinProtection(),
+                        settings = settings?.pin,
+                        replaceSavedPin = settings?.replaceSavedPin == true || it.replaceSavedPin,
+                        message = null,
+                        screenError = null,
+                        autoUnlockPending = settings == null,
+                    )
                 }
             }
 
-            PocketDestination.QR -> {
-                stopQr()
-                mutableState.update {
-                    it.copy(destination = PocketDestination.UNLOCK, qr = null, qrStage = null, pin = "", message = null)
-                }
-            }
+            PocketDestination.QR -> endSession()
 
             PocketDestination.SETTINGS -> mutableState.update {
                 it.copy(
-                    destination = if (qrJob?.isActive == true) PocketDestination.QR else PocketDestination.UNLOCK,
+                    destination = PocketDestination.QR,
+                    unlockPinProtection = effectivePinProtection(),
+                    settings = null,
                     message = null,
+                    screenError = it.screenError?.let { error ->
+                        if (error.recovery in setOf(ErrorRecovery.SETTINGS, ErrorRecovery.DELETE)) {
+                            error.copy(recovery = ErrorRecovery.UNLOCK)
+                        } else {
+                            error
+                        }
+                    },
+                    autoUnlockPending = false,
                 )
             }
 
@@ -435,81 +537,100 @@ class PocketController(
         }
     }
 
-    /** Called on app backgrounding. Settings preserves the session only while the app stays foreground. */
-    fun onBackground() {
-        operationVersion++
-        operation?.cancel()
-        pendingAuth?.cancel()
-        stopQr()
-        clearDraft()
+    private fun endSession() {
+        if (state.value.destination != PocketDestination.QR || state.value.busy) return
+        qrSession.stop()
         mutableState.update {
             it.copy(
-                destination = when {
-                    it.destination == PocketDestination.START -> PocketDestination.START
-                    it.account == null -> PocketDestination.IMPORT
-                    else -> PocketDestination.UNLOCK
-                },
+                destination = PocketDestination.UNLOCK,
+                pin = "",
+                message = null,
+                notice = null,
+                screenError = null,
+                autoUnlockPending = true,
+            )
+        }
+    }
+
+    fun onForeground() {
+        foreground = true
+        imports.onForeground()
+    }
+
+    private fun expireImport() {
+        imports.clear()
+        mutableState.update {
+            it.copy(
+                destination = if (it.account == null) PocketDestination.IMPORT else PocketDestination.UNLOCK,
                 importMode = ImportMode.NEW,
                 importForm = ImportForm(),
-                pin = "",
-                qr = null,
-                qrStage = null,
-                authPrompt = null,
-                confirmDelete = false,
-                busy = false,
+                screenError = null,
                 message = null,
             )
         }
     }
 
-    fun dispose() {
-        onBackground()
-        observer?.cancel()
-        timer?.cancel()
+    /** Close the session immediately; an unfinished import has a short, memory-only grace period. */
+    fun onBackground() {
+        val editingImport = state.value.editingImport
+        foreground = false
+        val committing = operations.committing
+        operations.onBackground()
+        authentication.cancel()
+        qrSession.stop()
+        replacementSettings = null
+        if (!editingImport) imports.clear()
+        mutableState.update {
+            it.copy(
+                destination = when {
+                    editingImport -> it.destination
+                    it.destination == PocketDestination.START -> PocketDestination.START
+                    it.account == null -> PocketDestination.IMPORT
+                    else -> PocketDestination.UNLOCK
+                },
+                importMode = if (editingImport) it.importMode else ImportMode.NEW,
+                settings = null,
+                notice = null,
+                importForm = if (editingImport) it.importForm else ImportForm(),
+                pin = "",
+                authPrompt = null,
+                autoUnlockPending = true,
+                confirmDelete = false,
+                screenBusy = committing,
+                message = null, screenError = null,
+            )
+        }
+        if (editingImport && !committing) imports.onBackground()
     }
 
-    private fun runOperation(block: suspend () -> Unit) {
-        if (state.value.busy || operation?.isCompleted == false) return
-        val version = ++operationVersion
-        mutableState.update { it.copy(busy = true, message = null) }
-        operation = scope.launch {
-            try {
-                block()
-            } catch (failure: Throwable) {
-                if (failure is CancellationException) throw failure
-                if (version == operationVersion) mutableState.update { it.copy(message = actionError(failure)) }
-            } finally {
-                if (version == operationVersion) mutableState.update { it.copy(busy = false) }
-            }
-        }
+    fun dispose() {
+        disposed = true
+        onBackground()
+        imports.clear()
+        mutableState.update { it.copy(importForm = ImportForm()) }
+        observer?.cancel()
+        attempts.dispose()
+    }
+
+    private fun runOperation(
+        errorOperation: ErrorOperation,
+        recovery: ErrorRecovery,
+        durable: Boolean = false,
+        block: suspend () -> Unit,
+    ) {
+        if (!state.value.busy) operations.run(errorOperation, recovery, durable, block)
     }
 
     private fun migrateAccountStorage() {
         if (!state.value.accountMigrationRequired) return
-        runOperation {
-            actions.migrateAccountStorage(authenticator(AuthKind.LEGACY_PROFILE_MIGRATION))
+        runOperation(ErrorOperation.MIGRATION, ErrorRecovery.MIGRATION) {
+            actions.migrateAccountStorage(authentication.authenticator(AuthKind.LEGACY_PROFILE_MIGRATION))
             currentCoroutineContext().ensureActive()
             mutableState.update {
                 it.copy(
                     accountMigrationRequired = false,
                     message = "Профиль обновлён. Теперь подтверждение требуется только для сохранённого PIN.",
                 )
-            }
-        }
-    }
-
-    private fun authenticator(kind: AuthKind) = CryptoAuthenticator { cipher ->
-        check(pendingAuth == null) { "Authentication is already pending" }
-        val request = CompletableDeferred<Unit>()
-        pendingAuth = request
-        mutableState.update { it.copy(authPrompt = AuthRequest(kind, cipher)) }
-        try {
-            request.await()
-            currentCoroutineContext().ensureActive()
-        } finally {
-            if (pendingAuth === request) {
-                pendingAuth = null
-                mutableState.update { it.copy(authPrompt = null) }
             }
         }
     }
@@ -523,88 +644,60 @@ class PocketController(
             PinProtection.NOT_SAVED
         }
 
-    private fun startCooldown() {
-        val seconds = listOf(5, 15, 30, 60)[failedAttempts.coerceAtMost(3)]
-        failedAttempts++
-        retryAtMillis = nowMillis() + seconds * 1000L
-        timer?.cancel()
-        mutableState.update { it.copy(retrySeconds = seconds) }
-        timer = scope.launch {
-            while (true) {
-                val remaining = ceil((retryAtMillis - nowMillis()).coerceAtLeast(0) / 1000.0).toInt()
-                mutableState.update { it.copy(retrySeconds = remaining) }
-                if (remaining == 0) break
-                delay(200)
+    private fun recoverError(error: PocketError) {
+        if (state.value.error !== error || state.value.busy) return
+        when (error.recovery) {
+            ErrorRecovery.STARTUP -> observeStorage()
+
+            ErrorRecovery.EDIT_IMPORT -> if (state.value.destination == PocketDestination.IMPORT) {
+                mutableState.update { it.copy(screenError = null) }
+            } else {
+                back()
             }
+
+            ErrorRecovery.IMPORT -> if (state.value.destination ==
+                PocketDestination.IMPORT
+            ) {
+                continueImport()
+            } else {
+                commitImport()
+            }
+
+            ErrorRecovery.BIOMETRIC -> useSavedPin()
+
+            ErrorRecovery.QR -> {
+                if (state.value.destination == PocketDestination.SETTINGS) {
+                    mutableState.update { it.copy(destination = PocketDestination.QR) }
+                }
+                refreshQr()
+            }
+
+            ErrorRecovery.SETTINGS -> applySettings()
+
+            ErrorRecovery.DELETE -> askDelete()
+
+            ErrorRecovery.MIGRATION -> migrateAccountStorage()
+
+            ErrorRecovery.REPLACE -> beginImport(ImportMode.REPLACE)
+
+            ErrorRecovery.UNLOCK -> {
+                qrSession.stop()
+                mutableState.update {
+                    it.copy(
+                        destination = PocketDestination.UNLOCK,
+                        screenError = null,
+                        message = null,
+                        autoUnlockPending = true,
+                    )
+                }
+            }
+
+            null -> Unit
         }
     }
 
-    private fun resetAttempts() {
-        failedAttempts = 0
-        retryAtMillis = 0
-        timer?.cancel()
-        mutableState.update { it.copy(retrySeconds = 0) }
-    }
-
-    private fun stopQr() {
-        qrVersion++
-        qrJob?.cancel()
-    }
-
-    private suspend fun stopQrAndWait() {
-        stopQr()
-        qrJob?.join()
-        qrJob = null
-        mutableState.update { it.copy(qr = null, qrStage = null) }
-    }
-
-    private fun clearDraft() {
-        draft?.password?.fill('\u0000')
-        draft = null
-    }
-
-    private fun actionError(failure: Throwable): String = when (failure) {
-        is AuthenticationException -> failure.reason.message()
-
-        is DataException -> when (failure.code) {
-            "WRONG_PASSPHRASE_OR_DAMAGED_LINK" -> "Неверный пароль ссылки или ссылка повреждена."
-            "PASSPHRASE_MUST_BE_ASCII_12_TO_256" -> "Пароль ссылки: от 12 до 256 печатных ASCII-символов."
-            "STORAGE_KEY_MISSING" -> "Ключ хранилища недоступен. Удалите секреты и импортируйте профиль заново."
-            else -> "Операция не выполнена (${failure.code}). Проверьте данные и повторите попытку."
-        }
-
-        else -> "Операция не выполнена. Проверьте данные и попробуйте снова."
-    }
-
-    private fun qrError(failure: QrGenerationFailure): String = when (failure) {
-        is QrGenerationFailure.Authentication -> failure.reason.message()
-
-        QrGenerationFailure.AuthorizationRejected -> "PIN не принят. Подождите перед следующей попыткой."
-
-        QrGenerationFailure.InvalidPin -> "PIN должен содержать четыре цифры."
-
-        QrGenerationFailure.AlreadyRunning -> "Получение QR уже запущено."
-
-        QrGenerationFailure.OperationFailed -> "Не удалось получить QR. Повторите попытку."
-
-        is QrGenerationFailure.Preflight -> when (failure.reason) {
-            DigitalIdPreflightFailure.ATTEMPTS_EXHAUSTED -> "Сервер не разрешает новые попытки PIN."
-
-            DigitalIdPreflightFailure.COOLDOWN -> "Сервер просит подождать. Попробуйте позже."
-
-            DigitalIdPreflightFailure.DEVICE_MISMATCH,
-            DigitalIdPreflightFailure.TIMESTAMP_MISMATCH,
-            ->
-                "Данные Digital ID изменились. Импортируйте аккаунт заново."
-
-            DigitalIdPreflightFailure.PIN_SALT_MISSING -> "В импорте нет данных для авторизации по PIN."
-
-            DigitalIdPreflightFailure.UNSUPPORTED_PROFILE -> "Профиль Digital ID недоступен."
-        }
-    }
-
-    private class ImportDraft(
-        val link: String,
-        val password: CharArray,
+    private class ReplacementSettings(
+        val pin: PinSettingsState,
+        val replaceSavedPin: Boolean,
     )
 }

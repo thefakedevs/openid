@@ -14,7 +14,7 @@ android {
     defaultConfig {
         applicationId = "ru.lavafrai.openid"
         minSdk = 26
-        targetSdk = 36
+        targetSdk = 37
         versionCode = 1
         versionName = "1.0"
     }
@@ -55,6 +55,9 @@ dependencies {
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.bundles.compose)
     implementation(libs.koin.android)
+    implementation(libs.qrose)
+    implementation(libs.materialkolor)
+    implementation(libs.material.symbols.rounded)
 
     debugImplementation(libs.androidx.compose.ui.tooling)
 }

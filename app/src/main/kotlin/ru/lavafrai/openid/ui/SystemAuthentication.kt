@@ -12,6 +12,8 @@ import androidx.fragment.app.FragmentActivity
 import ru.lavafrai.openid.data.core.VaultAuthentication
 import ru.lavafrai.openid.data.core.VaultProtection
 import ru.lavafrai.openid.models.auth.AuthenticationFailure
+import ru.lavafrai.openid.models.errors.FailureDiagnostic
+import ru.lavafrai.openid.models.errors.FailureKind
 
 @Composable
 fun SystemAuthentication(
@@ -80,9 +82,15 @@ fun SystemAuthentication(
             if (allowed and DEVICE_CREDENTIAL == 0) info.setNegativeButtonText("Отмена")
             try {
                 prompt.authenticate(info.build(), BiometricPrompt.CryptoObject(request.cipher))
-            } catch (_: Exception) {
+            } catch (failure: Exception) {
                 finished = true
-                dispatch(PocketAction.AuthFailed(request, AuthenticationFailure.FAILED))
+                dispatch(
+                    PocketAction.AuthFailed(
+                        request,
+                        AuthenticationFailure.FAILED,
+                        FailureDiagnostic.capture("AUTH_PROMPT_FAILED", FailureKind.STORAGE, failure),
+                    ),
+                )
             }
             onDispose {
                 // Do not cancel a successful crypto operation while storage is consuming its cipher.

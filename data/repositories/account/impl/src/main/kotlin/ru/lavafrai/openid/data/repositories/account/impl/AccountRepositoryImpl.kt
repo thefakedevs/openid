@@ -26,6 +26,8 @@ import ru.lavafrai.openid.models.account.AccountSummary
 import ru.lavafrai.openid.models.account.ImportedAccount
 import ru.lavafrai.openid.models.account.ImportedMaxAccount
 import ru.lavafrai.openid.models.auth.CryptoAuthenticator
+import ru.lavafrai.openid.models.errors.FailureDiagnostic
+import ru.lavafrai.openid.models.errors.FailureKind
 import ru.lavafrai.openid.models.max.MaxAccessToken
 
 class AccountRepositoryImpl(private val storage: SecretStorage) : AccountRepository {
@@ -37,7 +39,7 @@ class AccountRepositoryImpl(private val storage: SecretStorage) : AccountReposit
     private var initializationJob: Job? = null
     private val leases = mutableSetOf<Lease>()
     override val accountState: StateFlow<AccountState> get() {
-        if (state.value == AccountState.Unavailable) initialize()
+        if (state.value is AccountState.Unavailable) initialize()
         return state.asStateFlow()
     }
 
@@ -47,6 +49,7 @@ class AccountRepositoryImpl(private val storage: SecretStorage) : AccountReposit
 
     private fun initialize() = synchronized(stateLock) {
         if (initializationJob?.isActive == true) return@synchronized
+        state.value = AccountState.Loading
         initializationJob = storage.scope.launch {
             try {
                 storage.awaitReady()
@@ -65,15 +68,18 @@ class AccountRepositoryImpl(private val storage: SecretStorage) : AccountReposit
                 }
             } catch (failure: CancellationException) {
                 throw failure
-            } catch (_: Exception) {
-                state.value = AccountState.Unavailable
+            } catch (failure: Exception) {
+                state.value =
+                    AccountState.Unavailable(
+                        FailureDiagnostic.capture("STORAGE_UNAVAILABLE", FailureKind.STORAGE, failure),
+                    )
             }
         }
     }
 
     private suspend fun awaitReady() {
         initializationJob?.join()
-        requireData(state.value != AccountState.Unavailable, "STORAGE_UNAVAILABLE")
+        requireData(state.value !is AccountState.Unavailable, "STORAGE_UNAVAILABLE")
     }
 
     private fun summary(row: SecretRecord) = AccountSummary(row.accountId)
@@ -113,33 +119,33 @@ class AccountRepositoryImpl(private val storage: SecretStorage) : AccountReposit
         old: SecretRecord?,
     ) {
         val raw = AccountCodec.encode(account)
-        var next: SecretRecord? = null
-        var committed = false
         try {
             AccountCodec.decode(StrictJson.parse(raw))
-            next = storage.cipher.create("account", account.accountId, "DEVICE_KEY", VaultProtection.DEVICE, raw, null)
-            currentCoroutineContext().ensureActive()
-            withContext(NonCancellable + Dispatchers.IO) {
-                storage.mutex.withLock {
+            val next = storage.cipher.create(
+                "account",
+                account.accountId,
+                "DEVICE_KEY",
+                VaultProtection.DEVICE,
+                raw,
+                null,
+            )
+            storage.commit(
+                next,
+                old,
+                validate = {
                     requireData(record?.alias == old?.alias, "ACCOUNT_CHANGED")
                     requireData(old == null || record?.iv?.contentEquals(old.iv) == true, "ACCOUNT_CHANGED")
-                    storage.dao.write(next)
+                },
+                publish = {
                     synchronized(stateLock) {
                         revokeLeases()
                         record = next
                         publishState()
                     }
-                    committed = true
-                    old?.let { storage.cipher.deleteKey(it.alias) }
-                }
-            }
+                },
+            )
         } finally {
             raw.fill(0)
-            if (!committed) {
-                next?.let {
-                    withContext(NonCancellable + Dispatchers.IO) { storage.cipher.deleteKey(it.alias) }
-                }
-            }
         }
     }
 
@@ -225,18 +231,17 @@ class AccountRepositoryImpl(private val storage: SecretStorage) : AccountReposit
 
     override suspend fun delete() {
         awaitReady()
-        withContext(NonCancellable + Dispatchers.IO) {
-            storage.mutex.withLock {
-                val old = record
-                storage.dao.delete("account")
+        storage.delete(
+            slot = "account",
+            current = { record },
+            revokeLeases = { synchronized(stateLock) { revokeLeases() } },
+            publish = {
                 synchronized(stateLock) {
-                    revokeLeases()
                     record = null
                     publishState()
                 }
-                old?.let { storage.cipher.deleteKey(it.alias) }
-            }
-        }
+            },
+        )
     }
 
     private fun requireOwnedLease(lease: AccountLease): Lease = synchronized(stateLock) {

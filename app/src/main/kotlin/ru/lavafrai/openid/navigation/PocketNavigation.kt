@@ -1,25 +1,27 @@
 package ru.lavafrai.openid.navigation
 
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.LoadingIndicator
 import androidx.compose.runtime.Composable
 import ru.lavafrai.openid.ui.PocketAction
 import ru.lavafrai.openid.ui.PocketUiState
-import ru.lavafrai.openid.ui.components.ActionButton
-import ru.lavafrai.openid.ui.components.MockView
 import ru.lavafrai.openid.ui.importing.ImportScreen
 import ru.lavafrai.openid.ui.qr.QrScreen
 import ru.lavafrai.openid.ui.settings.SettingsScreen
 import ru.lavafrai.openid.ui.setup.SetupScreen
 import ru.lavafrai.openid.ui.unlock.UnlockScreen
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun PocketNavigation(
     state: PocketUiState,
+    manualPinEntry: Boolean,
+    onManualPinEntryChange: (Boolean) -> Unit,
     dispatch: (PocketAction) -> Unit,
 ) {
     when (state.destination) {
         PocketDestination.START -> {
-            MockView("Проверяем наличие аккаунта…")
-            if (state.message != null) ActionButton("Повторить", onClick = { dispatch(PocketAction.RetryStartup) })
+            if (state.error == null) LoadingIndicator()
         }
 
         PocketDestination.IMPORT -> ImportScreen(
@@ -41,18 +43,20 @@ fun PocketNavigation(
 
         PocketDestination.UNLOCK -> UnlockScreen(
             state = state,
+            manualEntry = manualPinEntry,
+            onManualEntryChange = onManualPinEntryChange,
+            onRecoverError = { dispatch(PocketAction.RecoverError(it)) },
             onPinChange = { dispatch(PocketAction.EditPin(it)) },
             onSubmit = { dispatch(PocketAction.SubmitPin) },
             onSavedPin = { dispatch(PocketAction.UseSavedPin) },
-            onDelete = { dispatch(PocketAction.AskDelete) },
             onMigrate = { dispatch(PocketAction.MigrateAccountStorage) },
-            onSubmitWithoutSaving = { dispatch(PocketAction.SubmitPinWithoutSaving) },
         )
 
         PocketDestination.QR -> QrScreen(
             state = state,
-            onSettings = { dispatch(PocketAction.OpenSettings) },
-            onLock = { dispatch(PocketAction.Back) },
+            onRecoverError = { dispatch(PocketAction.RecoverError(it)) },
+            onRefresh = { dispatch(PocketAction.RefreshQr) },
+            onLock = { dispatch(PocketAction.EndSession) },
         )
 
         PocketDestination.SETTINGS -> SettingsScreen(

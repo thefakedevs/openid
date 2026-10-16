@@ -5,6 +5,7 @@ import ru.lavafrai.openid.domain.models.QrGenerationStage
 import ru.lavafrai.openid.models.account.AccountSummary
 import ru.lavafrai.openid.models.auth.AuthenticationFailure
 import ru.lavafrai.openid.models.digitalid.QrSession
+import ru.lavafrai.openid.models.errors.FailureDiagnostic
 import ru.lavafrai.openid.models.pin.PinProtection
 import ru.lavafrai.openid.models.pin.SavedPinState
 import ru.lavafrai.openid.navigation.ImportMode
@@ -29,6 +30,13 @@ class AuthRequest(
     override fun toString(): String = "AuthRequest(kind=$kind, cipher=<redacted>)"
 }
 
+class PocketNotice(val message: String)
+
+data class PinSettingsState(
+    val selection: PinProtection,
+    val initial: PinProtection,
+)
+
 data class PocketUiState(
     val destination: PocketDestination = PocketDestination.START,
     val account: AccountSummary? = null,
@@ -36,16 +44,40 @@ data class PocketUiState(
     val importMode: ImportMode = ImportMode.NEW,
     val importForm: ImportForm = ImportForm(),
     val accountMigrationRequired: Boolean = false,
-    val pinProtection: PinProtection = PinProtection.NOT_SAVED,
+    val unlockPinProtection: PinProtection = PinProtection.NOT_SAVED,
+    val setupPinProtection: PinProtection = PinProtection.NOT_SAVED,
+    val settings: PinSettingsState? = null,
     val pin: String = "",
-    val busy: Boolean = false,
+    val screenBusy: Boolean = false,
     val message: String? = null,
-    val qr: QrSession? = null,
-    val qrStage: QrGenerationStage? = null,
+    val notice: PocketNotice? = null,
+    val screenError: PocketError? = null,
+    val session: QrSessionUiState = QrSessionUiState(),
+    val autoUnlockPending: Boolean = true,
+    val replaceSavedPin: Boolean = false,
     val retrySeconds: Int = 0,
     val confirmDelete: Boolean = false,
     val authPrompt: AuthRequest? = null,
 ) {
+    val editingImport: Boolean get() = destination == PocketDestination.IMPORT || destination == PocketDestination.SETUP
+    val busy: Boolean get() = screenBusy || (!editingImport && session.opening)
+    val error: PocketError? get() = screenError ?: session.error.takeUnless { editingImport }
+    val qr: QrSession? get() = session.qr
+    val qrStage: QrGenerationStage? get() = session.stage
+    val qrRefreshAtMillis: Long? get() = session.refreshAtMillis
+    val qrRefreshIntervalMillis: Long get() = session.refreshIntervalMillis
+    val pinProtection: PinProtection get() = when (destination) {
+        PocketDestination.SETUP -> setupPinProtection
+        PocketDestination.SETTINGS -> settings?.selection ?: unlockPinProtection
+        else -> unlockPinProtection
+    }
+    val initialSettingsPinProtection: PinProtection? get() = settings?.initial
+    val hasSettingsChanges: Boolean get() = destination == PocketDestination.SETTINGS &&
+        settings?.let { it.selection != it.initial } == true
+
+    val willSavePin: Boolean get() = pinProtection == PinProtection.BIOMETRIC &&
+        (replaceSavedPin || (savedPin as? SavedPinState.Saved)?.takeIf { it.accountId == account?.accountId } == null)
+
     val hasBack: Boolean get() = destination in setOf(
         PocketDestination.SETUP,
         PocketDestination.QR,
@@ -76,9 +108,17 @@ sealed interface PocketAction {
 
     data object UseSavedPin : PocketAction
 
+    data object AutoUnlock : PocketAction
+
+    data object RefreshQr : PocketAction
+
+    data class RecoverError(val error: PocketError) : PocketAction
+
     data object OpenSettings : PocketAction
 
     data object ApplySettings : PocketAction
+
+    data class DismissNotice(val notice: PocketNotice) : PocketAction
 
     data object ReplaceAccount : PocketAction
 
@@ -95,9 +135,12 @@ sealed interface PocketAction {
     data class AuthFailed(
         val request: AuthRequest,
         val reason: AuthenticationFailure,
+        val diagnostic: FailureDiagnostic? = null,
     ) : PocketAction
 
-    data object Back : PocketAction
+    data class Back(val from: PocketDestination) : PocketAction
+
+    data object EndSession : PocketAction
 
     data object RetryStartup : PocketAction
 }

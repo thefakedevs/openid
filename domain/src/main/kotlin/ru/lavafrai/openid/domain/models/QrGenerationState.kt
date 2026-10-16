@@ -1,8 +1,10 @@
 package ru.lavafrai.openid.domain.models
 
+import kotlin.time.Duration
 import ru.lavafrai.openid.domain.usecases.DigitalIdPreflightFailure
 import ru.lavafrai.openid.models.auth.AuthenticationFailure
 import ru.lavafrai.openid.models.digitalid.QrSession
+import ru.lavafrai.openid.models.errors.FailureDiagnostic
 
 enum class QrGenerationStage {
     UNLOCKING_ACCOUNT,
@@ -13,6 +15,7 @@ enum class QrGenerationStage {
     CHECKING_SECURITY,
     GETTING_PIN,
     AUTHORIZING,
+    SAVING_PIN,
     GENERATING_QR,
     REFRESHING_QR,
 }
@@ -34,8 +37,16 @@ sealed interface QrGenerationFailure {
 sealed interface QrGenerationState {
     data class Loading(val stage: QrGenerationStage) : QrGenerationState
 
-    data class Ready(val qr: QrSession) : QrGenerationState
+    data class Ready(
+        val qr: QrSession,
+        val refreshInterval: Duration? = null,
+    ) : QrGenerationState
 
-    /** Contains no raw exception messages, credentials or stale QR payload. */
-    data class Failed(val reason: QrGenerationFailure) : QrGenerationState
+    /** A recoverable request failure pauses the session until an explicit refresh request. */
+    data class Failed(
+        val reason: QrGenerationFailure,
+        val diagnostic: FailureDiagnostic,
+        val stage: QrGenerationStage,
+        val canRetryInSession: Boolean = false,
+    ) : QrGenerationState
 }

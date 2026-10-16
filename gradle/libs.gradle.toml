@@ -18,8 +18,14 @@ lz4 = "1.12.0"
 okhttp = "5.5.0"
 spotless = "8.10.4"
 ktlint = "1.8.0"
+qrose = "1.3.1"
+materialkolor = "5.0.1"
+material-symbols = "2.2.1"
 
 [libraries]
+qrose = { module = "io.github.alexzhirkevich:qrose", version.ref = "qrose" }
+materialkolor = { module = "com.materialkolor:material-kolor", version.ref = "materialkolor" }
+material-symbols-rounded = { module = "com.composables:icons-material-symbols-rounded-android", version.ref = "material-symbols" }
 kotlin-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
 msgpack-core = { module = "org.msgpack:msgpack-core", version.ref = "msgpack" }

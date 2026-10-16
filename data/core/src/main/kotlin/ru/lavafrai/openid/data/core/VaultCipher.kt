@@ -20,6 +20,7 @@ import kotlinx.coroutines.withContext
 import ru.lavafrai.openid.models.auth.AuthenticationException
 import ru.lavafrai.openid.models.auth.AuthenticationFailure
 import ru.lavafrai.openid.models.auth.CryptoAuthenticator
+import ru.lavafrai.openid.models.errors.FailureReason
 
 enum class VaultProtection {
     DEVICE,
@@ -129,7 +130,9 @@ class VaultCipher(private val context: Context) {
         authenticator: CryptoAuthenticator?,
     ): OpenSecret {
         val cipher = withContext(Dispatchers.IO) {
-            val key = keystore.getKey(record.alias, null) as? SecretKey ?: throw DataException("STORAGE_KEY_MISSING")
+            val key =
+                keystore.getKey(record.alias, null) as? SecretKey
+                    ?: throw DataException(FailureReason.STORAGE_KEY_MISSING)
             Cipher.getInstance("AES/GCM/NoPadding").apply {
                 init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, record.wrappingIv))
             }
@@ -161,10 +164,10 @@ class VaultCipher(private val context: Context) {
         val causes = generateSequence<Throwable>(failure) { it.cause }.take(10).toList()
         return when {
             causes.any { it is KeyPermanentlyInvalidatedException } ->
-                AuthenticationException(AuthenticationFailure.KEY_INVALIDATED)
+                AuthenticationException(AuthenticationFailure.KEY_INVALIDATED, failure)
 
             causes.any { it is UserNotAuthenticatedException } ->
-                AuthenticationException(AuthenticationFailure.NOT_AUTHENTICATED)
+                AuthenticationException(AuthenticationFailure.NOT_AUTHENTICATED, failure)
 
             else -> failure
         }

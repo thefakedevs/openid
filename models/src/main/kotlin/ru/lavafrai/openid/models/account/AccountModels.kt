@@ -1,12 +1,13 @@
 package ru.lavafrai.openid.models.account
 
+import ru.lavafrai.openid.models.errors.FailureDiagnostic
 /** Safe to expose while the account credentials are locked. */
 data class AccountSummary(val accountId: Long)
 
 sealed interface AccountState {
     data object Loading : AccountState
 
-    data object Unavailable : AccountState
+    data class Unavailable(val diagnostic: FailureDiagnostic) : AccountState
 
     data object Empty : AccountState
 

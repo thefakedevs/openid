@@ -113,9 +113,9 @@ internal class RealDigitalIdHttp : DigitalIdHttp {
             } catch (failure: DataException) {
                 currentCoroutineContext().ensureActive()
                 throw failure
-            } catch (_: Exception) {
+            } catch (failure: Exception) {
                 currentCoroutineContext().ensureActive()
-                throw DataException("DIGITAL_ID_CONNECTION_FAILED")
+                throw DataException("DIGITAL_ID_CONNECTION_FAILED", failure)
             }
         }
         try {

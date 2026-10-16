@@ -5,6 +5,7 @@ import ru.lavafrai.openid.data.repositories.importing.api.ImportRepository
 import ru.lavafrai.openid.data.repositories.pin.api.PinRepository
 import ru.lavafrai.openid.domain.AccountOperationCoordinator
 import ru.lavafrai.openid.models.account.AccountSummary
+import ru.lavafrai.openid.models.account.ImportedAccount
 
 class ReplaceAccountUseCase(
     private val imports: ImportRepository,
@@ -20,13 +21,12 @@ class ReplaceAccountUseCase(
     suspend operator fun invoke(
         url: String,
         password: CharArray,
-    ): AccountSummary {
-        val account = imports.decodeWithPasswordCopy(url, password)
-        return operations.mutate {
-            val previous = checkNotNull(accounts.getSummary()) { "No account to replace" }
-            pins.delete(previous.accountId)
-            accounts.replace(account)
-            AccountSummary(account.accountId)
-        }
+    ): AccountSummary = invoke(imports.decodeWithPasswordCopy(url, password))
+
+    suspend operator fun invoke(account: ImportedAccount): AccountSummary = operations.mutate {
+        val previous = checkNotNull(accounts.getSummary()) { "No account to replace" }
+        pins.delete(previous.accountId)
+        accounts.replace(account)
+        AccountSummary(account.accountId)
     }
 }

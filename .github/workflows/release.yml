@@ -1,0 +1,183 @@
+name: Publish release builds
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Version to build (for example 1.0.0 or v1.0.0)'
+        required: true
+        type: string
+      upload:
+        description: 'Attach the signed APK to the existing GitHub release'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+  # Artifact-only manual runs build the selected ref; publication builds the tag.
+  CHECKOUT_REF: ${{ (github.event_name == 'release' || inputs.upload) && (github.event.release.tag_name || inputs.tag) || github.ref }}
+  PUBLISH: ${{ github.event_name == 'release' || inputs.upload }}
+
+jobs:
+  version:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
+          persist-credentials: false
+
+      - name: Validate tag and source version
+        id: version
+        shell: python
+        run: |
+          import os
+          import pathlib
+          import re
+
+          tag = os.environ['RELEASE_TAG']
+          version = tag.removeprefix('v')
+          if not re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', version):
+              raise SystemExit('Release tag must look like 1.2.3 or v1.2.3')
+          major, minor, patch = map(int, version.split('.'))
+          code = major * 1_000_000 + minor * 1000 + patch
+          if major > 2100 or minor >= 1000 or patch >= 1000 or not 1 <= code <= 2_100_000_000:
+              raise SystemExit('Version exceeds the Android versionCode range')
+          if os.environ['PUBLISH'] == 'true':
+              properties = dict(
+                  line.strip().split('=', 1)
+                  for line in pathlib.Path('gradle.properties').read_text().splitlines()
+                  if line.strip() and not line.lstrip().startswith('#') and '=' in line
+              )
+              if properties.get('openid.version') != version or properties.get('openid.versionCode') != str(code):
+                  raise SystemExit(
+                      f'Before tagging, set openid.version={version} and openid.versionCode={code} '
+                      'in gradle.properties'
+                  )
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'version={version}\n')
+
+  build_android:
+    name: Build signed Android APK
+    needs: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      OPENID_BUILD_VERSION: ${{ needs.version.outputs.version }}
+      ANDROID_KEYSTORE_KEY: ${{ secrets.android_key_alias }}
+      ANDROID_KEYSTORE_KEY_PASSWORD: ${{ secrets.android_key_password }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.android_keystore_password }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
+          persist-credentials: false
+
+      - name: Check signing secrets and decode keystore
+        shell: python
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE: ${{ runner.temp }}/openid-release.keystore
+        run: |
+          import base64
+          import os
+          import pathlib
+
+          required = (
+              'ANDROID_KEYSTORE_B64', 'ANDROID_KEYSTORE_KEY',
+              'ANDROID_KEYSTORE_KEY_PASSWORD', 'ANDROID_KEYSTORE_PASSWORD',
+          )
+          if any(not os.environ.get(name) for name in required):
+              raise SystemExit(
+                  'Configure GitHub Actions secrets: ANDROID_KEYSTORE_B64, android_key_alias, '
+                  'android_key_password, android_keystore_password'
+              )
+          try:
+              keystore = base64.b64decode(''.join(os.environ['ANDROID_KEYSTORE_B64'].split()), validate=True)
+          except ValueError:
+              raise SystemExit('ANDROID_KEYSTORE_B64 must contain a base64-encoded keystore') from None
+          if not keystore:
+              raise SystemExit('The signing keystore is empty')
+          path = pathlib.Path(os.environ['ANDROID_KEYSTORE'])
+          path.write_bytes(keystore)
+          path.chmod(0o600)
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write(f'ANDROID_KEYSTORE={path}\n')
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: zulu
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      - uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools platforms;android-37.1 build-tools;37.0.0'
+
+      - name: Build release APK
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon ktlintCheck :app:assembleRelease
+
+      - name: Verify signature and prepare APK
+        shell: bash
+        run: |
+          apk='app/build/outputs/apk/release/app-release.apk'
+          "$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --verbose "$apk"
+          cp "$apk" "openid-${OPENID_BUILD_VERSION}.apk"
+          sha256sum "openid-${OPENID_BUILD_VERSION}.apk" > "openid-${OPENID_BUILD_VERSION}.apk.sha256"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-release
+          path: |
+            openid-${{ env.OPENID_BUILD_VERSION }}.apk
+            openid-${{ env.OPENID_BUILD_VERSION }}.apk.sha256
+          if-no-files-found: error
+
+      - name: Remove signing keystore
+        if: always()
+        shell: python
+        env:
+          ANDROID_KEYSTORE: ${{ runner.temp }}/openid-release.keystore
+        run: |
+          import os
+          import pathlib
+          pathlib.Path(os.environ['ANDROID_KEYSTORE']).unlink(missing_ok=True)
+
+  publish:
+    name: Attach APK to GitHub Release
+    if: github.event_name == 'release' || inputs.upload
+    needs: [version, build_android]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: android-release
+          path: artifacts
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          gh release upload "$RELEASE_TAG" "artifacts/openid-${VERSION}.apk" "artifacts/openid-${VERSION}.apk.sha256" --clobber

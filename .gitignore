@@ -38,3 +38,6 @@ signing.properties
 .DS_Store
 Thumbs.db
 Desktop.ini
+/gradle/gradle-daemon-jvm.properties
+
+/screen.png

@@ -227,15 +227,6 @@ private fun PocketTopBar(
                         description = stringResource(R.string.action_back),
                     )
                 }
-            } else {
-                Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.primary) {
-                    Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
-                        PocketIcon(
-                            Symbols.drawable.materialsymbols_ic_fingerprint_rounded,
-                            tint = MaterialTheme.colorScheme.onPrimary,
-                        )
-                    }
-                }
             }
         }
         Text(

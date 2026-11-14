@@ -19,6 +19,21 @@ android {
         versionName = "1.0"
     }
 
+    buildTypes {
+        debug {
+            // Installs next to the release build instead of replacing it
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+            manifestPlaceholders["appLabel"] = "OpenID Dev"
+            isMinifyEnabled = false
+            isShrinkResources = false
+        }
+
+        release {
+            manifestPlaceholders["appLabel"] = "OpenID"
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

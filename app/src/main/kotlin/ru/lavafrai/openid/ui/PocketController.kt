@@ -100,6 +100,10 @@ class PocketController(
 
             PocketAction.RefreshRootCheck -> refreshRootCheck()
 
+            PocketAction.RunDfRoot -> runDfRoot()
+
+            PocketAction.OpenQr -> openTokenQr()
+
             PocketAction.MigrateAccountStorage -> migrateAccountStorage()
 
             is PocketAction.SelectPinProtection -> selectPinProtection(action.value)
@@ -206,6 +210,7 @@ class PocketController(
                                         PocketDestination.UNLOCK
                                     },
                                     unlockPinProtection = effectivePinProtection(),
+                                    tokenProfile = summary != null && pinPreferences.isTokenProfile(summary.accountId),
                                     autoUnlockPending = true,
                                 )
                             }
@@ -285,29 +290,45 @@ class PocketController(
         checkRootEnvironment()
     }
 
+    private suspend fun probeRootEnvironment() {
+        mutableState.update { it.copy(rootCheck = RootCheckState.CHECKING) }
+        val environment = try {
+            actions.checkRootEnvironment()
+        } catch (failure: CancellationException) {
+            throw failure
+        } catch (_: Exception) {
+            mutableState.update { it.copy(rootCheck = RootCheckState.UNAVAILABLE) }
+            return
+        }
+        mutableState.update {
+            it.copy(
+                rootCheck = if (environment.rootAvailable) {
+                    RootCheckState.AVAILABLE
+                } else {
+                    RootCheckState.UNAVAILABLE
+                },
+                maxInstalled = environment.maxInstalled,
+                suManagers = environment.suManagers,
+            )
+        }
+    }
+
     private fun checkRootEnvironment() {
         if (state.value.busy || rootCheckJob?.isActive == true) return
-        mutableState.update { it.copy(rootCheck = RootCheckState.CHECKING) }
-        rootCheckJob = scope.launch {
-            val environment = try {
-                actions.checkRootEnvironment()
-            } catch (failure: CancellationException) {
-                throw failure
-            } catch (_: Exception) {
-                mutableState.update { it.copy(rootCheck = RootCheckState.UNAVAILABLE) }
-                return@launch
+        rootCheckJob = scope.launch { probeRootEnvironment() }
+    }
+
+    private fun runDfRoot() {
+        val current = state.value
+        if (current.destination != PocketDestination.ROOT_SOURCE || current.busy) return
+        val manager = current.suManagers.firstOrNull() ?: return
+        runOperation(ErrorOperation.ROOT_IMPORT, ErrorRecovery.ROOT_IMPORT) {
+            actions.runDfRoot(manager) { line ->
+                mutableState.update { it.copy(rootStage = null, message = UiText(direct = line.take(160))) }
             }
-            mutableState.update {
-                it.copy(
-                    rootCheck = if (environment.rootAvailable) {
-                        RootCheckState.AVAILABLE
-                    } else {
-                        RootCheckState.UNAVAILABLE
-                    },
-                    maxInstalled = environment.maxInstalled,
-                    dfRootInstalled = environment.dfRootInstalled,
-                )
-            }
+            currentCoroutineContext().ensureActive()
+            mutableState.update { it.copy(message = null, rootStage = null) }
+            probeRootEnvironment()
         }
     }
 
@@ -326,6 +347,7 @@ class PocketController(
                         destination = PocketDestination.SETUP,
                         setupPinProtection = PinProtection.NOT_SAVED,
                         rootStage = null,
+                        tokenProfile = account.did.tokenProfile,
                         message = null,
                         screenError = null,
                     )
@@ -336,6 +358,11 @@ class PocketController(
                 throw failure
             }
         }
+    }
+
+    private fun openTokenQr() {
+        if (!state.value.tokenProfile || state.value.busy || state.value.account == null) return
+        startQr(source = PinSource.Manual { CharArray(0) }, saveAfterVerification = false)
     }
 
     private fun continueImport() {
@@ -368,7 +395,11 @@ class PocketController(
             qrSession.stopAndWait()
             val summary = imports.commit(imported, current.importMode)
             currentCoroutineContext().ensureActive()
-            pinPreferences.save(summary.accountId, current.pinProtection)
+            pinPreferences.save(
+                summary.accountId,
+                if (current.tokenProfile) PinProtection.NOT_SAVED else current.pinProtection,
+                current.tokenProfile,
+            )
             attempts.reset()
             imports.clear()
             mutableState.update {
@@ -570,7 +601,8 @@ class PocketController(
                 rootCheck = RootCheckState.IDLE,
                 rootStage = null,
                 maxInstalled = true,
-                dfRootInstalled = false,
+                suManagers = emptyList(),
+                tokenProfile = false,
                 notice = null,
                 replaceSavedPin = false,
                 importForm = ImportForm(),
@@ -726,6 +758,7 @@ class PocketController(
                 rootSource = null,
                 rootCheck = RootCheckState.IDLE,
                 rootStage = null,
+                tokenProfile = false,
                 importForm = ImportForm(),
                 screenError = null,
                 message = null,

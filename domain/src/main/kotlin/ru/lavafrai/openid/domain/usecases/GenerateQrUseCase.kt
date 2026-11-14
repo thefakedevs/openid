@@ -88,24 +88,37 @@ class GenerateQrUseCase(
     ): AuthorizedDigitalId {
         var pin: UnlockedPin? = null
         try {
+            val account = lease.account
+            val captured = account.did.biometricToken
+            if (captured != null && account.did.pinSalt == null) {
+                // Captured-token profile: MAX already holds a valid authorization token; no PIN exists.
+                val launch = openDigitalId(lease, stage)
+                stage(QrGenerationStage.CHECKING_SECURITY)
+                validateStatus(account.did, digitalId.getSecurityStatus(launch))
+                stage(QrGenerationStage.AUTHORIZING)
+                if (!digitalId.authorize(launch, captured).authorizationStatus) {
+                    throw DigitalIdAuthorizationRejectedException()
+                }
+                return AuthorizedDigitalId(launch, captured)
+            }
             // Biometrics precede network I/O; manual PIN acquisition follows the server preflight.
             if (source is PinSource.Saved) {
                 stage(QrGenerationStage.GETTING_PIN)
                 pin = unlockPin(lease.account.accountId, source)
             }
             val launch = openDigitalId(lease, stage)
-            val account = lease.account // Includes any token rotation performed by MAX login.
+            val account2 = lease.account // Includes any token rotation performed by MAX login.
             stage(QrGenerationStage.CHECKING_SECURITY)
-            validateStatus(account.did, digitalId.getSecurityStatus(launch))
+            validateStatus(account2.did, digitalId.getSecurityStatus(launch))
             val unlocked = pin ?: run {
                 stage(QrGenerationStage.GETTING_PIN)
-                unlockPin(account.accountId, source).also { pin = it }
+                unlockPin(account2.accountId, source).also { pin = it }
             }
-            val token = pinToken(checkNotNull(account.did.pinSalt), unlocked)
+            val token = pinToken(checkNotNull(account2.did.pinSalt), unlocked)
             stage(QrGenerationStage.AUTHORIZING)
             if (!digitalId.authorize(launch, token).authorizationStatus) throw DigitalIdAuthorizationRejectedException()
             stage(QrGenerationStage.SAVING_PIN)
-            VerifiedPin(lease, account, unlocked).use { onPinVerified(it) }
+            VerifiedPin(lease, account2, unlocked).use { onPinVerified(it) }
             return AuthorizedDigitalId(launch, token)
         } finally {
             pin?.close()

@@ -43,6 +43,7 @@ include(":digitalid:api")
 include(":digitalid:impl")
 include(":maximport:api")
 include(":maximport:impl")
+include(":dfroot")
 
 project(":import").projectDir = file("data/repositories/import")
 project(":import:api").projectDir = file("data/repositories/import/api")

@@ -62,6 +62,7 @@ dependencies {
     implementation(projects.digitalid.impl)
     implementation(projects.maximport.api)
     implementation(projects.maximport.impl)
+    implementation(projects.dfroot)
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.compose)

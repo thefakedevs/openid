@@ -40,11 +40,49 @@ fun UnlockScreen(
     onPinChange: (String) -> Unit,
     onSubmit: () -> Unit,
     onSavedPin: () -> Unit,
+    onOpenTokenQr: () -> Unit,
     onMigrate: () -> Unit,
 ) {
     val saved = (state.savedPin as? SavedPinState.Saved)?.takeIf { it.accountId == state.account?.accountId }
     val canSubmit = !state.busy && state.retrySeconds == 0
     var showPinHelp by remember { mutableStateOf(false) }
+    if (state.tokenProfile && !state.accountMigrationRequired) {
+        Column(verticalArrangement = Arrangement.spacedBy(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            state.error?.let { error -> ErrorCard(error, { onRecoverError(error) }, enabled = canSubmit) }
+            if (state.error?.stage == ru.lavafrai.openid.domain.models.QrGenerationStage.AUTHORIZING) {
+                Text(
+                    stringResource(R.string.unlock_token_stale),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (state.error == null) {
+                ScreenHeading(
+                    stringResource(R.string.unlock_token_title),
+                    stringResource(R.string.unlock_token_description),
+                )
+                PrimaryButton(
+                    stringResource(R.string.qr_open),
+                    onOpenTokenQr,
+                    enabled = canSubmit,
+                    icon = Symbols.drawable.materialsymbols_ic_qr_code_2_rounded,
+                )
+                Text(
+                    stringResource(R.string.unlock_token_hint),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            state.message?.let {
+                InfoCard(
+                    it.resolve(),
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                    icon = Symbols.drawable.materialsymbols_ic_info_rounded,
+                )
+            }
+        }
+        return
+    }
     BackHandler(saved != null && manualEntry && !state.busy) {
         onPinChange("")
         onManualEntryChange(false)

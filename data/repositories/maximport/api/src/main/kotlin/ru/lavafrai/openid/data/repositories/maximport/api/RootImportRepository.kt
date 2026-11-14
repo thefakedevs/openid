@@ -9,13 +9,13 @@ enum class RootImportStage {
     READING_PREFERENCES,
     VERIFYING_SESSION,
     READING_DIGITAL_ID,
+    SCANNING_MEMORY,
 }
 
 /** Installed packages and links used by the automatic import flow. */
 object RootImportPackages {
     const val MAX = "ru.oneme.app"
-    const val DFROOT = "df.root"
-    const val DFROOT_RELEASES_URL = "https://github.com/diabl0w/DFRoot/releases/latest"
+    const val KSU_RELEASES_URL = "https://github.com/tiann/KernelSU/releases/latest"
 }
 
 interface RootImportRepository {
@@ -25,13 +25,15 @@ interface RootImportRepository {
     /** MAX is installed and visible to this application. */
     suspend fun isMaxInstalled(): Boolean
 
-    /** DFRoot is installed and launchable. */
-    suspend fun isDfRootInstalled(): Boolean
+    /** Installed SU managers able to provide `libksud.so` for the embedded DFRoot exploit. */
+    suspend fun suManagers(): List<String>
 
     /**
      * Reads the MAX session and Digital ID material from local storage via root and verifies the
-     * session with a short MAX login; the account id comes from the server reply. The result stays
-     * in memory only. DataException reports failure causes as stable diagnostic codes.
+     * session with a short MAX login; the account id comes from the server reply. When MAX stores
+     * its Digital ID SecureStorage encrypted, the last authorization token is captured from the
+     * MAX process memory instead, producing a token profile without PIN material. The result
+     * stays in memory only. DataException reports failure causes as stable diagnostic codes.
      */
     suspend fun extract(onStage: (RootImportStage) -> Unit = {}): ImportedAccount
 }

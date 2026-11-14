@@ -156,6 +156,12 @@ private fun rootImportMessage(code: String): Pair<UiText, UiText> = when (code) 
     "DID_MATERIAL_NOT_FOUND" ->
         UiText(R.string.error_did_material_title) to UiText(R.string.error_did_material_description)
 
+    "DID_TOKEN_NOT_RUNNING" ->
+        UiText(R.string.error_did_token_title) to UiText(R.string.error_did_token_description)
+
+    "DID_TOKEN_AMBIGUOUS" ->
+        UiText(R.string.error_did_ambiguous_title) to UiText(R.string.error_did_ambiguous_description)
+
     "MAX_IMPORT_CHANGED", "MAX_SESSION_AMBIGUOUS" ->
         UiText(R.string.error_root_changed_title) to UiText(R.string.error_root_changed_description)
 

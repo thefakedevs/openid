@@ -7,6 +7,10 @@
     <queries>
         <package android:name="ru.oneme.app"/>
         <package android:name="df.root"/>
+        <intent>
+            <action android:name="android.intent.action.MAIN"/>
+            <category android:name="android.intent.category.LAUNCHER"/>
+        </intent>
     </queries>
 
     <application

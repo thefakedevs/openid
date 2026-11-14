@@ -27,11 +27,14 @@ class ImportedMaxAccount(
 }
 
 class ImportedDigitalId(
-    val biometricDeviceId: String,
-    val creationTimestamp: DigitalIdTimestamp,
+    val biometricDeviceId: String? = null,
+    val creationTimestamp: DigitalIdTimestamp? = null,
     val pinSalt: String? = null,
     val biometricToken: DigitalIdToken? = null,
 ) {
+    /** A profile captured as a ready authorization token carries no PIN material at all. */
+    val tokenProfile: Boolean get() = pinSalt == null && biometricToken != null
+
     override fun toString(): String = "ImportedDigitalId(<redacted>)"
 }
 

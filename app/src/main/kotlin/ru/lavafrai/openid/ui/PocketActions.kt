@@ -24,4 +24,5 @@ class PocketActions(
     val deleteAccount: DeleteAccountUseCase,
     val extractMaxAccount: ExtractMaxAccountUseCase,
     val checkRootEnvironment: CheckRootEnvironmentUseCase,
+    val runDfRoot: suspend (suManager: String, report: (String) -> Unit) -> Unit,
 )

@@ -1,8 +1,10 @@
 package ru.lavafrai.openid.data.repositories.maximport.impl
 
 import android.content.Context
+import android.content.Intent
 import android.os.Build
 import android.webkit.WebSettings
+import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -17,6 +19,7 @@ import ru.lavafrai.openid.models.account.ImportOptions
 import ru.lavafrai.openid.models.account.ImportedAccount
 import ru.lavafrai.openid.models.account.ImportedDigitalId
 import ru.lavafrai.openid.models.account.ImportedMaxAccount
+import ru.lavafrai.openid.models.digitalid.DigitalIdToken
 import ru.lavafrai.openid.models.max.MaxAccessToken
 import ru.lavafrai.openid.models.max.MaxClientProfile
 import ru.lavafrai.openid.models.max.MaxCredentials
@@ -39,7 +42,20 @@ internal class MaxRootImportRepository(
 
     override suspend fun isMaxInstalled(): Boolean = installed(RootImportPackages.MAX)
 
-    override suspend fun isDfRootInstalled(): Boolean = installed(RootImportPackages.DFROOT)
+    override suspend fun suManagers(): List<String> = withContext(Dispatchers.IO) {
+        val launcher = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        val activities = runCatching {
+            context.packageManager.queryIntentActivities(launcher, 0)
+        }.getOrDefault(emptyList())
+        activities.mapNotNull { info ->
+            val packageName = info.activityInfo?.packageName ?: return@mapNotNull null
+            runCatching {
+                val application = context.packageManager.getApplicationInfo(packageName, 0)
+                val nativeDir = application.nativeLibraryDir ?: return@mapNotNull null
+                packageName.takeIf { File(nativeDir, KSUD_LIBRARY).exists() }
+            }.getOrNull()
+        }.distinct()
+    }
 
     override suspend fun extract(onStage: (RootImportStage) -> Unit): ImportedAccount {
         onStage(RootImportStage.CHECKING_ROOT)
@@ -61,7 +77,31 @@ internal class MaxRootImportRepository(
         val verified = verifySession(accessToken, deviceId, appVersion, webUserAgent)
 
         onStage(RootImportStage.READING_DIGITAL_ID)
-        val material = extractMaterial(user, records)
+        val material = DidMaterialBuilder()
+        materialFromPreferences(records, material)
+        if (!material.isComplete) materialFromLocalStorage(user, material)
+        if (!material.isComplete) materialFromRawSweep(user, records, material)
+
+        val did = if (material.isComplete) {
+            ImportedDigitalId(
+                biometricDeviceId = checkNotNull(material.biometricDeviceId),
+                creationTimestamp = checkNotNull(material.creationTimestamp),
+                pinSalt = checkNotNull(material.pinSalt),
+            )
+        } else {
+            // MAX encrypts its SecureStorage at rest; the plaintext never reaches the disk.
+            // The last authorization token survives in the process memory bridge log instead.
+            onStage(RootImportStage.SCANNING_MEMORY)
+            when (val capture = MemoryTokenScanner(shell, RootImportPackages.MAX).capture()) {
+                MemoryTokenScanner.Capture.NotFound -> throw DataException("DID_TOKEN_NOT_RUNNING")
+
+                MemoryTokenScanner.Capture.Ambiguous -> throw DataException("DID_TOKEN_AMBIGUOUS")
+
+                is MemoryTokenScanner.Capture.Token -> ImportedDigitalId(
+                    biometricToken = DigitalIdToken(capture.value),
+                )
+            }
+        }
         return ImportedAccount(
             accountId = verified.accountId,
             max = ImportedMaxAccount(
@@ -75,11 +115,7 @@ internal class MaxRootImportRepository(
                 ),
                 botId = botId,
             ),
-            did = ImportedDigitalId(
-                biometricDeviceId = checkNotNull(material.biometricDeviceId),
-                creationTimestamp = checkNotNull(material.creationTimestamp),
-                pinSalt = checkNotNull(material.pinSalt),
-            ),
+            did = did,
             webUserAgent = webUserAgent,
             options = ImportOptions(),
         )
@@ -166,18 +202,6 @@ internal class MaxRootImportRepository(
         }
         requireData(files > 0, "MAX_PREFERENCES_MISSING")
         return records
-    }
-
-    private suspend fun extractMaterial(
-        user: Int,
-        records: List<PrefRecord>,
-    ): DidMaterialBuilder {
-        val material = DidMaterialBuilder()
-        materialFromPreferences(records, material)
-        if (!material.isComplete) materialFromLocalStorage(user, material)
-        if (!material.isComplete) materialFromRawSweep(user, records, material)
-        requireData(material.isComplete, "DID_MATERIAL_NOT_FOUND")
-        return material
     }
 
     private fun materialFromPreferences(
@@ -312,6 +336,7 @@ internal class MaxRootImportRepository(
         const val KEY_PIN_SALT = "pin_salt::digitalId"
         const val KEY_CREATION_TIMESTAMP = "creation_timestamp::digitalId"
         const val BIOMETRY_FRAGMENT = "biomet"
+        const val KSUD_LIBRARY = "libksud.so"
         val SESSION_STRING_KEYS = setOf(KEY_ACCESS_TOKEN, KEY_DEVICE_ID, KEY_PIN_SALT, KEY_CREATION_TIMESTAMP)
         val SESSION_NUMERIC_KEYS = setOf(KEY_BOT_ID)
         val BIOMETRY_FRAGMENTS = setOf(BIOMETRY_FRAGMENT)

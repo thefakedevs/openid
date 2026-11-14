@@ -39,7 +39,7 @@ import ru.lavafrai.openid.ui.components.ScreenHeading
 
 /**
  * The second automatic-import step: root is either already confirmed by a manager or obtained
- * through DFRoot. The ready-root option stays disabled until `su` answers on this device.
+ * through the embedded DFRoot exploit. The ready-root option stays disabled until `su` answers.
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -47,10 +47,12 @@ fun RootSourceScreen(
     selected: RootSource?,
     check: RootCheckState,
     maxInstalled: Boolean,
-    dfRootInstalled: Boolean,
+    suManagers: List<String>,
+    dfRootLog: String?,
     busy: Boolean,
     onSelect: (RootSource) -> Unit,
     onRefreshCheck: () -> Unit,
+    onRunDfRoot: () -> Unit,
     onNext: () -> Unit,
 ) {
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { onRefreshCheck() }
@@ -77,9 +79,9 @@ fun RootSourceScreen(
             )
             ChoiceCard(
                 title = stringResource(R.string.root_dfroot_label),
-                description = dfRootDescription(dfRootInstalled),
+                description = dfRootDescription(suManagers, android.os.Build.VERSION.SDK_INT >= 28),
                 selected = selected == RootSource.DFROOT,
-                enabled = !busy,
+                enabled = !busy && android.os.Build.VERSION.SDK_INT >= 28,
                 onClick = { onSelect(RootSource.DFROOT) },
                 icon = Symbols.drawable.materialsymbols_ic_electric_bolt_rounded,
             )
@@ -93,7 +95,7 @@ fun RootSourceScreen(
             )
 
             selected == RootSource.DFROOT && check != RootCheckState.AVAILABLE && !busy ->
-                DfRootGuidance(dfRootInstalled, context)
+                DfRootGuidance(suManagers.isNotEmpty(), dfRootLog, context, onRunDfRoot)
         }
         PrimaryButton(
             stringResource(R.string.action_continue),
@@ -104,13 +106,15 @@ fun RootSourceScreen(
 }
 
 @Composable
-private fun dfRootDescription(dfRootInstalled: Boolean): String {
+private fun dfRootDescription(
+    suManagers: List<String>,
+    sdkSupported: Boolean,
+): String {
     val base = stringResource(R.string.root_dfroot_description)
-    return if (dfRootInstalled) {
-        base
-    } else {
-        base + " " + stringResource(R.string.root_dfroot_missing_suffix)
-    }
+    var text = base
+    if (suManagers.isEmpty()) text += " " + stringResource(R.string.root_dfroot_no_manager_suffix)
+    if (!sdkSupported) text += " " + stringResource(R.string.root_dfroot_sdk_suffix)
+    return text
 }
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
@@ -131,49 +135,65 @@ private fun CheckingRow() {
 
 @Composable
 private fun DfRootGuidance(
-    dfRootInstalled: Boolean,
-    context: Context,
+    managerInstalled: Boolean,
+    dfRootLog: String?,
+    context: android.content.Context,
+    onRunDfRoot: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         InfoCard(
             stringResource(
-                if (dfRootInstalled) R.string.root_dfroot_run_notice else R.string.root_dfroot_install_notice,
+                if (managerInstalled) R.string.root_dfroot_run_notice else R.string.root_dfroot_install_notice,
             ),
             icon = Symbols.drawable.materialsymbols_ic_info_rounded,
         )
-        OutlinedButton(
-            onClick = { openDfRoot(context, dfRootInstalled) },
-            shapes = ButtonDefaults.shapes(),
-            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-        ) {
-            Text(
-                stringResource(
-                    if (dfRootInstalled) R.string.root_dfroot_open else R.string.root_dfroot_install,
-                ),
-                modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Spacer(Modifier.width(12.dp))
-            PocketIcon(
-                Symbols.drawable.materialsymbols_ic_open_in_new_rounded,
-                tint = MaterialTheme.colorScheme.primary,
-            )
-        }
-    }
-}
-
-private fun openDfRoot(
-    context: Context,
-    dfRootInstalled: Boolean,
-) {
-    runCatching {
-        if (dfRootInstalled) {
-            val launch = context.packageManager.getLaunchIntentForPackage(RootImportPackages.DFROOT)
-            if (launch != null) {
-                context.startActivity(launch)
-                return
+        if (managerInstalled) {
+            OutlinedButton(
+                onClick = onRunDfRoot,
+                shapes = ButtonDefaults.shapes(),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+            ) {
+                Text(
+                    stringResource(R.string.root_dfroot_run),
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Spacer(Modifier.width(12.dp))
+                PocketIcon(
+                    Symbols.drawable.materialsymbols_ic_electric_bolt_rounded,
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
+        } else {
+            OutlinedButton(
+                onClick = {
+                    runCatching {
+                        context.startActivity(
+                            Intent(Intent.ACTION_VIEW, Uri.parse(RootImportPackages.KSU_RELEASES_URL)),
+                        )
+                    }
+                },
+                shapes = ButtonDefaults.shapes(),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+            ) {
+                Text(
+                    stringResource(R.string.root_dfroot_install),
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Spacer(Modifier.width(12.dp))
+                PocketIcon(
+                    Symbols.drawable.materialsymbols_ic_open_in_new_rounded,
+                    tint = MaterialTheme.colorScheme.primary,
+                )
             }
         }
-        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(RootImportPackages.DFROOT_RELEASES_URL)))
+        dfRootLog?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }

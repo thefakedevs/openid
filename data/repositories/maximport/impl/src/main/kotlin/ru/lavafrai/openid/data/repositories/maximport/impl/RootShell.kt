@@ -32,6 +32,35 @@ internal class RootShell(private val io: kotlinx.coroutines.CoroutineDispatcher 
         runCatching { execute(command, timeoutMillis) }.getOrNull()
     }
 
+    /** Reads [byteCount] bytes of a process memory region page-by-page through dd. */
+    suspend fun readMemory(
+        pid: Int,
+        startAddress: Long,
+        byteCount: Long,
+        onChunk: (ByteArray) -> Unit,
+    ): Boolean = withContext(io) {
+        val pageSize = 4096L
+        val firstPage = startAddress / pageSize
+        val pages = byteCount / pageSize
+        var offset = 0L
+        while (offset < pages) {
+            val batch = minOf(pages - offset, READ_PAGES_PER_COMMAND)
+            val chunk = runCatching {
+                execute(
+                    "dd if=/proc/$pid/mem bs=4096 skip=$((firstPage + offset)) count=$batch 2>/dev/null",
+                    READ_TIMEOUT_MILLIS,
+                )
+            }.getOrNull() ?: return@withContext false
+            if (chunk.size < batch * pageSize) {
+                // Short reads mean an unmapped hole inside the region; stop this region gracefully.
+                if (chunk.isEmpty()) return@withContext false
+            }
+            onChunk(chunk)
+            offset += batch
+        }
+        true
+    }
+
     /** Null on timeout, denied access, a non-zero exit code or any launch failure. */
     private fun execute(
         command: String,
@@ -59,5 +88,7 @@ internal class RootShell(private val io: kotlinx.coroutines.CoroutineDispatcher 
     private companion object {
         const val PROBE_TIMEOUT_MILLIS = 8_000L
         const val DEFAULT_TIMEOUT_MILLIS = 15_000L
+        const val READ_TIMEOUT_MILLIS = 30_000L
+        const val READ_PAGES_PER_COMMAND = 65_536L // 256 MiB per dd command
     }
 }

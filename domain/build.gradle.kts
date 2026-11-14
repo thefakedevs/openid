@@ -21,4 +21,5 @@ dependencies {
     api(projects.pin.api)
     api(projects.max.api)
     api(projects.digitalid.api)
+    api(projects.maximport.api)
 }

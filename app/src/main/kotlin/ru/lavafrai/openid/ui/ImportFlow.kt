@@ -37,6 +37,12 @@ internal class ImportFlow(
         }
     }
 
+    /** Holds an account extracted from MAX via root; the same memory-only grace rules apply. */
+    fun hold(account: ImportedAccount) {
+        clear()
+        draft = Draft("", CharArray(0), account)
+    }
+
     suspend fun commit(
         account: ImportedAccount,
         mode: ImportMode,

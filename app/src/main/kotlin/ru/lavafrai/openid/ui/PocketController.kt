@@ -12,13 +12,16 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import ru.lavafrai.openid.R
+import ru.lavafrai.openid.data.repositories.maximport.api.RootImportStage
 import ru.lavafrai.openid.models.account.AccountState
 import ru.lavafrai.openid.models.auth.AuthenticationException
 import ru.lavafrai.openid.models.pin.PinProtection
 import ru.lavafrai.openid.models.pin.PinSource
 import ru.lavafrai.openid.models.pin.SavedPinState
+import ru.lavafrai.openid.navigation.ImportMethod
 import ru.lavafrai.openid.navigation.ImportMode
 import ru.lavafrai.openid.navigation.PocketDestination
+import ru.lavafrai.openid.navigation.RootSource
 
 /** App-level UI state, kept by a ViewModel. Secrets are not written to SavedStateHandle or route arguments. */
 class PocketController(
@@ -31,6 +34,7 @@ class PocketController(
     val state: StateFlow<PocketUiState> = mutableState.asStateFlow()
     private var replacementSettings: ReplacementSettings? = null
     private var observer: Job? = null
+    private var rootCheckJob: Job? = null
     private var foreground = true
     private var disposed = false
     private val authentication = AuthenticationCoordinator { prompt ->
@@ -85,6 +89,16 @@ class PocketController(
                     it.copy(pin = action.value.filter { char -> char in '0'..'9' }.take(4), message = null)
                 }
             }
+
+            is PocketAction.SelectImportMethod -> selectImportMethod(action.value)
+
+            PocketAction.ContinueImportMethod -> continueImportMethod()
+
+            is PocketAction.SelectRootSource -> selectRootSource(action.value)
+
+            PocketAction.ContinueRootImport -> continueRootImport()
+
+            PocketAction.RefreshRootCheck -> refreshRootCheck()
 
             PocketAction.MigrateAccountStorage -> migrateAccountStorage()
 
@@ -187,7 +201,7 @@ class PocketController(
                             mutableState.update {
                                 it.copy(
                                     destination = if (summary == null) {
-                                        PocketDestination.IMPORT
+                                        PocketDestination.METHOD
                                     } else {
                                         PocketDestination.UNLOCK
                                     },
@@ -196,7 +210,13 @@ class PocketController(
                                 )
                             }
                         } else if (summary == null &&
-                            state.value.destination !in setOf(PocketDestination.IMPORT, PocketDestination.SETUP)
+                            state.value.destination !in
+                            setOf(
+                                PocketDestination.METHOD,
+                                PocketDestination.IMPORT,
+                                PocketDestination.ROOT_SOURCE,
+                                PocketDestination.SETUP,
+                            )
                         ) {
                             beginImport(ImportMode.NEW)
                         }
@@ -219,6 +239,101 @@ class PocketController(
         if (!state.value.busy) {
             mutableState.update {
                 it.copy(importForm = change(it.importForm), message = null, screenError = null)
+            }
+        }
+    }
+
+    private fun selectImportMethod(method: ImportMethod) {
+        if (state.value.busy) return
+        mutableState.update { it.copy(importMethod = method, message = null, screenError = null) }
+    }
+
+    private fun continueImportMethod() {
+        val current = state.value
+        if (current.destination != PocketDestination.METHOD || current.busy) return
+        when (current.importMethod) {
+            ImportMethod.MANUAL -> mutableState.update {
+                it.copy(destination = PocketDestination.IMPORT, message = null, screenError = null)
+            }
+
+            ImportMethod.AUTO -> {
+                imports.clear()
+                mutableState.update {
+                    it.copy(
+                        destination = PocketDestination.ROOT_SOURCE,
+                        rootSource = null,
+                        rootStage = null,
+                        importForm = ImportForm(),
+                        message = null,
+                        screenError = null,
+                    )
+                }
+                checkRootEnvironment()
+            }
+
+            null -> mutableState.update { it.copy(message = UiText(R.string.notice_method_required)) }
+        }
+    }
+
+    private fun selectRootSource(source: RootSource) {
+        if (state.value.busy) return
+        mutableState.update { it.copy(rootSource = source, message = null, screenError = null) }
+    }
+
+    private fun refreshRootCheck() {
+        if (state.value.destination != PocketDestination.ROOT_SOURCE || state.value.busy) return
+        checkRootEnvironment()
+    }
+
+    private fun checkRootEnvironment() {
+        if (state.value.busy || rootCheckJob?.isActive == true) return
+        mutableState.update { it.copy(rootCheck = RootCheckState.CHECKING) }
+        rootCheckJob = scope.launch {
+            val environment = try {
+                actions.checkRootEnvironment()
+            } catch (failure: CancellationException) {
+                throw failure
+            } catch (_: Exception) {
+                mutableState.update { it.copy(rootCheck = RootCheckState.UNAVAILABLE) }
+                return@launch
+            }
+            mutableState.update {
+                it.copy(
+                    rootCheck = if (environment.rootAvailable) {
+                        RootCheckState.AVAILABLE
+                    } else {
+                        RootCheckState.UNAVAILABLE
+                    },
+                    maxInstalled = environment.maxInstalled,
+                    dfRootInstalled = environment.dfRootInstalled,
+                )
+            }
+        }
+    }
+
+    private fun continueRootImport() {
+        val current = state.value
+        if (current.destination != PocketDestination.ROOT_SOURCE || current.busy || current.rootSource == null) return
+        runOperation(ErrorOperation.ROOT_IMPORT, ErrorRecovery.ROOT_IMPORT) {
+            try {
+                val account = actions.extractMaxAccount { stage ->
+                    mutableState.update { it.copy(rootStage = stage) }
+                }
+                currentCoroutineContext().ensureActive()
+                imports.hold(account)
+                mutableState.update {
+                    it.copy(
+                        destination = PocketDestination.SETUP,
+                        setupPinProtection = PinProtection.NOT_SAVED,
+                        rootStage = null,
+                        message = null,
+                        screenError = null,
+                    )
+                }
+            } catch (failure: Exception) {
+                if (failure is CancellationException) throw failure
+                mutableState.update { it.copy(rootStage = null) }
+                throw failure
             }
         }
     }
@@ -444,11 +559,18 @@ class PocketController(
         val preserveSession = replacementSettings != null
         if (!preserveSession) qrSession.stop()
         imports.clear()
+        rootCheckJob?.cancel()
         mutableState.update {
             it.copy(
-                destination = PocketDestination.IMPORT,
+                destination = PocketDestination.METHOD,
                 settings = null,
                 importMode = mode,
+                importMethod = null,
+                rootSource = null,
+                rootCheck = RootCheckState.IDLE,
+                rootStage = null,
+                maxInstalled = true,
+                dfRootInstalled = false,
                 notice = null,
                 replaceSavedPin = false,
                 importForm = ImportForm(),
@@ -483,7 +605,15 @@ class PocketController(
     private fun back() {
         if (state.value.busy) return
         when (state.value.destination) {
-            PocketDestination.SETUP -> {
+            PocketDestination.SETUP -> if (state.value.importMethod == ImportMethod.AUTO) {
+                mutableState.update {
+                    it.copy(
+                        destination = PocketDestination.ROOT_SOURCE,
+                        message = null,
+                        screenError = null,
+                    )
+                }
+            } else {
                 val form = imports.restoreForm()
                 imports.clear()
                 mutableState.update {
@@ -496,7 +626,34 @@ class PocketController(
                 }
             }
 
-            PocketDestination.IMPORT -> if (state.value.importMode == ImportMode.REPLACE) {
+            PocketDestination.ROOT_SOURCE -> {
+                imports.clear()
+                mutableState.update {
+                    it.copy(
+                        destination = PocketDestination.METHOD,
+                        rootSource = null,
+                        rootStage = null,
+                        message = null,
+                        screenError = null,
+                    )
+                }
+            }
+
+            PocketDestination.IMPORT -> {
+                val form = imports.restoreForm()
+                imports.clear()
+                mutableState.update {
+                    it.copy(
+                        destination = PocketDestination.METHOD,
+                        importMethod = null,
+                        importForm = form,
+                        message = null,
+                        screenError = null,
+                    )
+                }
+            }
+
+            PocketDestination.METHOD -> if (state.value.importMode == ImportMode.REPLACE) {
                 val settings = replacementSettings
                 replacementSettings = null
                 imports.clear()
@@ -504,6 +661,7 @@ class PocketController(
                     it.copy(
                         destination = if (settings != null) PocketDestination.SETTINGS else PocketDestination.UNLOCK,
                         importMode = ImportMode.NEW,
+                        importMethod = null,
                         importForm = ImportForm(),
                         unlockPinProtection = effectivePinProtection(),
                         settings = settings?.pin,
@@ -562,8 +720,12 @@ class PocketController(
         imports.clear()
         mutableState.update {
             it.copy(
-                destination = if (it.account == null) PocketDestination.IMPORT else PocketDestination.UNLOCK,
+                destination = if (it.account == null) PocketDestination.METHOD else PocketDestination.UNLOCK,
                 importMode = ImportMode.NEW,
+                importMethod = null,
+                rootSource = null,
+                rootCheck = RootCheckState.IDLE,
+                rootStage = null,
                 importForm = ImportForm(),
                 screenError = null,
                 message = null,
@@ -580,19 +742,23 @@ class PocketController(
         authentication.cancel()
         qrSession.stop()
         replacementSettings = null
-        if (!editingImport) imports.clear()
+        if (!editingImport) {
+            rootCheckJob?.cancel()
+            imports.clear()
+        }
         mutableState.update {
             it.copy(
                 destination = when {
                     editingImport -> it.destination
                     it.destination == PocketDestination.START -> PocketDestination.START
-                    it.account == null -> PocketDestination.IMPORT
+                    it.account == null -> PocketDestination.METHOD
                     else -> PocketDestination.UNLOCK
                 },
                 importMode = if (editingImport) it.importMode else ImportMode.NEW,
                 settings = null,
                 notice = null,
                 importForm = if (editingImport) it.importForm else ImportForm(),
+                rootStage = null,
                 pin = "",
                 authPrompt = null,
                 autoUnlockPending = true,
@@ -607,6 +773,7 @@ class PocketController(
     fun dispose() {
         disposed = true
         onBackground()
+        rootCheckJob?.cancel()
         imports.clear()
         mutableState.update { it.copy(importForm = ImportForm()) }
         observer?.cancel()
@@ -663,6 +830,8 @@ class PocketController(
             } else {
                 commitImport()
             }
+
+            ErrorRecovery.ROOT_IMPORT -> continueRootImport()
 
             ErrorRecovery.BIOMETRIC -> useSavedPin()
 

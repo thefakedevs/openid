@@ -1,0 +1,325 @@
+package ru.lavafrai.openid.data.repositories.maximport.impl
+
+import android.content.Context
+import android.os.Build
+import android.webkit.WebSettings
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
+import ru.lavafrai.openid.data.core.DataException
+import ru.lavafrai.openid.data.core.requireData
+import ru.lavafrai.openid.data.repositories.max.api.MaxSessionRepository
+import ru.lavafrai.openid.data.repositories.maximport.api.RootImportPackages
+import ru.lavafrai.openid.data.repositories.maximport.api.RootImportRepository
+import ru.lavafrai.openid.data.repositories.maximport.api.RootImportStage
+import ru.lavafrai.openid.models.account.ImportOptions
+import ru.lavafrai.openid.models.account.ImportedAccount
+import ru.lavafrai.openid.models.account.ImportedDigitalId
+import ru.lavafrai.openid.models.account.ImportedMaxAccount
+import ru.lavafrai.openid.models.max.MaxAccessToken
+import ru.lavafrai.openid.models.max.MaxClientProfile
+import ru.lavafrai.openid.models.max.MaxCredentials
+import ru.lavafrai.openid.models.max.MaxUserAgent
+
+/**
+ * Pulls the MAX session and Digital ID material from local storage on this device via root.
+ * The preference reading mirrors the reference exporter (`.prefs` binaries and `.xml` maps,
+ * two stable passes); the Digital ID material is located best-effort because MAX does not
+ * expose where mini-app SecureStorage is persisted. The account id is resolved with a short
+ * MAX login instead of a guessed preference key.
+ */
+internal class MaxRootImportRepository(
+    private val context: Context,
+    private val sessions: MaxSessionRepository,
+    private val shell: RootShell = RootShell(),
+    private val nowMillis: () -> Long = { System.currentTimeMillis() },
+) : RootImportRepository {
+    override suspend fun checkRootAccess(): Boolean = shell.available()
+
+    override suspend fun isMaxInstalled(): Boolean = installed(RootImportPackages.MAX)
+
+    override suspend fun isDfRootInstalled(): Boolean = installed(RootImportPackages.DFROOT)
+
+    override suspend fun extract(onStage: (RootImportStage) -> Unit): ImportedAccount {
+        onStage(RootImportStage.CHECKING_ROOT)
+        requireData(shell.available(), "ROOT_ACCESS_DENIED")
+
+        onStage(RootImportStage.LOCATING_MAX)
+        val appVersion = packageVersion() ?: throw DataException("MAX_APP_MISSING")
+        val user = packageUser()
+        requireData(user >= 0, "MAX_APP_MISSING")
+
+        onStage(RootImportStage.READING_PREFERENCES)
+        val records = stablePreferences(user)
+        val accessToken = requireSessionText(records, KEY_ACCESS_TOKEN, minLength = 8, maxLength = 32_768)
+        val deviceId = requireSessionText(records, KEY_DEVICE_ID, minLength = 8, maxLength = 256)
+        val botId = uniqueText(records, KEY_BOT_ID) { value -> value as? Long }?.takeIf { it > 0 }
+
+        onStage(RootImportStage.VERIFYING_SESSION)
+        val webUserAgent = defaultUserAgent()
+        val verified = verifySession(accessToken, deviceId, appVersion, webUserAgent)
+
+        onStage(RootImportStage.READING_DIGITAL_ID)
+        val material = extractMaterial(user, records)
+        return ImportedAccount(
+            accountId = verified.accountId,
+            max = ImportedMaxAccount(
+                accessToken = MaxAccessToken(verified.accessToken),
+                deviceId = deviceId,
+                userAgent = MaxUserAgent(
+                    appVersion = appVersion,
+                    osVersion = Build.VERSION.RELEASE,
+                    deviceName = Build.MODEL,
+                    headerUserAgent = webUserAgent,
+                ),
+                botId = botId,
+            ),
+            did = ImportedDigitalId(
+                biometricDeviceId = checkNotNull(material.biometricDeviceId),
+                creationTimestamp = checkNotNull(material.creationTimestamp),
+                pinSalt = checkNotNull(material.pinSalt),
+            ),
+            webUserAgent = webUserAgent,
+            options = ImportOptions(),
+        )
+    }
+
+    private suspend fun installed(packageName: String): Boolean = withContext(Dispatchers.IO) {
+        runCatching {
+            context.packageManager.getPackageInfo(packageName, 0)
+            true
+        }.getOrDefault(false)
+    }
+
+    private suspend fun packageVersion(): String? = withContext(Dispatchers.IO) {
+        runCatching { context.packageManager.getPackageInfo(RootImportPackages.MAX, 0).versionName }
+            .getOrNull()
+            ?.takeIf { it.length in 1..64 }
+    }
+
+    private suspend fun packageUser(): Int = withContext(Dispatchers.IO) {
+        runCatching { context.packageManager.getApplicationInfo(RootImportPackages.MAX, 0).uid / 100_000 }
+            .getOrDefault(-1)
+    }
+
+    private suspend fun defaultUserAgent(): String = withContext(Dispatchers.Main) {
+        WebSettings.getDefaultUserAgent(context)
+    }.also { userAgent ->
+        requireData(userAgent.length in 8..1024 && userAgent.all { it.code in 32..126 }, "WEB_USER_AGENT_INVALID")
+    }
+
+    /** Session verification resolves the account id and adopts a token rotation, if any. */
+    private suspend fun verifySession(
+        accessToken: String,
+        deviceId: String,
+        appVersion: String,
+        webUserAgent: String,
+    ): Verified {
+        val profile = MaxClientProfile(
+            userAgent = MaxUserAgent(
+                appVersion = appVersion,
+                osVersion = Build.VERSION.RELEASE,
+                deviceName = Build.MODEL,
+                headerUserAgent = webUserAgent,
+            ),
+            webUserAgent = webUserAgent,
+        )
+        // A zero account id asks the session to trust the server reply during login.
+        val credentials = MaxCredentials(0L, MaxAccessToken(accessToken), deviceId)
+        sessions.open(credentials, profile).use { session ->
+            val result = session.login()
+            val accountId = result.accountId
+            requireData(accountId != null && accountId > 0, "MAX_ACCOUNT_ID_MISSING")
+            return Verified(checkNotNull(accountId), result.rotatedAccessToken?.value ?: accessToken)
+        }
+    }
+
+    private suspend fun stablePreferences(user: Int): List<PrefRecord> {
+        val first = readPreferences(user)
+        val second = readPreferences(user)
+        requireData(first == second, "MAX_IMPORT_CHANGED")
+        return second
+    }
+
+    private suspend fun readPreferences(user: Int): List<PrefRecord> {
+        val dataRoot = "/data/user/$user/${RootImportPackages.MAX}"
+        val records = mutableListOf<PrefRecord>()
+        var files = 0
+        var totalBytes = 0L
+        for ((subdirectory, pattern) in PREFERENCE_DIRECTORIES) {
+            val directory = "$dataRoot/$subdirectory"
+            val listing = shell.text(
+                "find '$directory' -maxdepth 1 -type f -name '$pattern' -print0 2>/dev/null",
+            ) ?: continue
+            for (path in listing.split('\u0000')) {
+                if (files >= MAX_FILES || totalBytes >= MAX_TOTAL_BYTES) break
+                if (!path.startsWith(directory)) continue
+                val quoted = shellQuote(path)
+                val raw = shell.binary("[ ! -L $quoted ] && head -c ${MAX_FILE_BYTES + 1} $quoted") ?: continue
+                if (raw.size > MAX_FILE_BYTES) continue
+                files++
+                totalBytes += raw.size
+                records += if (path.endsWith(".prefs")) parsePrefs(raw) else XmlPrefsCodec.parse(raw)
+                currentCoroutineContext().ensureActive()
+            }
+        }
+        requireData(files > 0, "MAX_PREFERENCES_MISSING")
+        return records
+    }
+
+    private suspend fun extractMaterial(
+        user: Int,
+        records: List<PrefRecord>,
+    ): DidMaterialBuilder {
+        val material = DidMaterialBuilder()
+        materialFromPreferences(records, material)
+        if (!material.isComplete) materialFromLocalStorage(user, material)
+        if (!material.isComplete) materialFromRawSweep(user, records, material)
+        requireData(material.isComplete, "DID_MATERIAL_NOT_FOUND")
+        return material
+    }
+
+    private fun materialFromPreferences(
+        records: List<PrefRecord>,
+        material: DidMaterialBuilder,
+    ) {
+        for (record in records) {
+            when {
+                record.key == KEY_PIN_SALT -> material.addPinSaltEnvelope(record.value as? String, nowMillis())
+
+                record.key == KEY_CREATION_TIMESTAMP ->
+                    material.addTimestampEnvelope(record.value as? String, nowMillis())
+
+                record.key.contains(BIOMETRY_FRAGMENT, ignoreCase = true) ->
+                    material.addBiometryId(record.value as? String)
+            }
+        }
+    }
+
+    private suspend fun materialFromLocalStorage(
+        user: Int,
+        material: DidMaterialBuilder,
+    ) {
+        val webviewRoot = shellQuote("/data/user/$user/${RootImportPackages.MAX}/app_webview")
+        val listing = shell.text(
+            "find $webviewRoot -type f -path '*leveldb*' -size -${MAX_FILE_BYTES + 1}c -print0 2>/dev/null",
+            timeoutMillis = READ_TIMEOUT_MILLIS,
+        ) ?: return
+        var files = 0
+        for (path in listing.split('\u0000')) {
+            if (!path.contains("leveldb") || files >= MAX_FILES) continue
+            val quoted = shellQuote(path)
+            val raw = shell.binary("[ ! -L $quoted ] && head -c ${MAX_FILE_BYTES + 1} $quoted") ?: continue
+            if (raw.size > MAX_FILE_BYTES) continue
+            files++
+            val values = LocalStorageCodec.scan(raw, setOf(KEY_PIN_SALT, KEY_CREATION_TIMESTAMP))
+            material.addPinSaltEnvelope(values[KEY_PIN_SALT], nowMillis())
+            material.addTimestampEnvelope(values[KEY_CREATION_TIMESTAMP], nowMillis())
+            currentCoroutineContext().ensureActive()
+            if (material.isComplete) return
+        }
+    }
+
+    private suspend fun materialFromRawSweep(
+        user: Int,
+        records: List<PrefRecord>,
+        material: DidMaterialBuilder,
+    ) {
+        val dataRoot = shellQuote("/data/user/$user/${RootImportPackages.MAX}")
+        val listing = shell.text(
+            "grep -rls -e '$KEY_PIN_SALT' -e '$KEY_CREATION_TIMESTAMP' $dataRoot" +
+                " --exclude-dir=cache --exclude-dir=code_cache --exclude-dir=no_backup 2>/dev/null",
+            timeoutMillis = SWEEP_TIMEOUT_MILLIS,
+        ) ?: return
+        var files = 0
+        for (path in listing.split('\n')) {
+            if (files >= MAX_FILES) break
+            if (!path.startsWith("/data/user/$user/${RootImportPackages.MAX}")) continue
+            val quoted = shellQuote(path)
+            val raw = shell.binary("[ ! -L $quoted ] && head -c ${MAX_FILE_BYTES + 1} $quoted") ?: continue
+            if (raw.size > MAX_FILE_BYTES) continue
+            files++
+            when {
+                path.endsWith(".prefs") -> materialFromPreferences(parsePrefs(raw), material)
+
+                path.endsWith(".xml") -> materialFromPreferences(XmlPrefsCodec.parse(raw), material)
+
+                path.contains("leveldb") -> {
+                    val values = LocalStorageCodec.scan(raw, setOf(KEY_PIN_SALT, KEY_CREATION_TIMESTAMP))
+                    material.addPinSaltEnvelope(values[KEY_PIN_SALT], nowMillis())
+                    material.addTimestampEnvelope(values[KEY_CREATION_TIMESTAMP], nowMillis())
+                }
+
+                else -> {
+                    material.addPinSaltEnvelope(RawFileScanner.envelopes(raw, KEY_PIN_SALT).firstOrNull(), nowMillis())
+                    material.addTimestampEnvelope(
+                        RawFileScanner.envelopes(raw, KEY_CREATION_TIMESTAMP).firstOrNull(),
+                        nowMillis(),
+                    )
+                }
+            }
+            currentCoroutineContext().ensureActive()
+            if (material.isComplete) return
+        }
+        if (!material.isComplete) materialFromPreferences(records, material)
+    }
+
+    private fun requireSessionText(
+        records: List<PrefRecord>,
+        key: String,
+        minLength: Int,
+        maxLength: Int,
+    ): String {
+        val value = uniqueText(records, key) { candidate -> candidate as? String }
+        requireData(value != null, "MAX_PREFERENCES_MISSING")
+        val text = checkNotNull(value)
+        requireData(
+            text.length in minLength..maxLength &&
+                text.none { it.code < 32 || it.code == 127 } &&
+                text.none { it.isWhitespace() },
+            "MAX_PREFERENCES_MISSING",
+        )
+        return text
+    }
+
+    private fun <T> uniqueText(
+        records: List<PrefRecord>,
+        key: String,
+        transform: (Any) -> T?,
+    ): T? {
+        val values = records.filter { it.key == key }.mapNotNull { transform(it.value) }.distinct()
+        requireData(values.size <= 1, "MAX_SESSION_AMBIGUOUS")
+        return values.singleOrNull()
+    }
+
+    private fun shellQuote(path: String): String = "'${path.replace("'", "'\\''")}'"
+
+    /** Exact session keys first; biometry hints come from the walk-back fragment scan. */
+    private fun parsePrefs(raw: ByteArray): List<PrefRecord> =
+        JavaPrefsCodec.scan(raw, SESSION_STRING_KEYS, SESSION_NUMERIC_KEYS) +
+            JavaPrefsCodec.scanFragments(raw, BIOMETRY_FRAGMENTS)
+
+    private class Verified(
+        val accountId: Long,
+        val accessToken: String,
+    )
+
+    private companion object {
+        const val KEY_ACCESS_TOKEN = "auth.token"
+        const val KEY_DEVICE_ID = "device.id"
+        const val KEY_BOT_ID = "digitalid-botid"
+        const val KEY_PIN_SALT = "pin_salt::digitalId"
+        const val KEY_CREATION_TIMESTAMP = "creation_timestamp::digitalId"
+        const val BIOMETRY_FRAGMENT = "biomet"
+        val SESSION_STRING_KEYS = setOf(KEY_ACCESS_TOKEN, KEY_DEVICE_ID, KEY_PIN_SALT, KEY_CREATION_TIMESTAMP)
+        val SESSION_NUMERIC_KEYS = setOf(KEY_BOT_ID)
+        val BIOMETRY_FRAGMENTS = setOf(BIOMETRY_FRAGMENT)
+        val PREFERENCE_DIRECTORIES = listOf("app_file_prefs" to "*.prefs", "shared_prefs" to "*.xml")
+        const val MAX_FILES = 128
+        const val MAX_FILE_BYTES = 8_388_608
+        const val MAX_TOTAL_BYTES = 32_000_000L
+        const val READ_TIMEOUT_MILLIS = 20_000L
+        const val SWEEP_TIMEOUT_MILLIS = 30_000L
+    }
+}

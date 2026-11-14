@@ -1,7 +1,9 @@
 package ru.lavafrai.openid.ui
 
+import ru.lavafrai.openid.domain.usecases.CheckRootEnvironmentUseCase
 import ru.lavafrai.openid.domain.usecases.DeleteAccountUseCase
 import ru.lavafrai.openid.domain.usecases.DeleteSavedPinUseCase
+import ru.lavafrai.openid.domain.usecases.ExtractMaxAccountUseCase
 import ru.lavafrai.openid.domain.usecases.GenerateQrUseCase
 import ru.lavafrai.openid.domain.usecases.GetAccountStateUseCase
 import ru.lavafrai.openid.domain.usecases.GetSavedPinStateUseCase
@@ -20,4 +22,6 @@ class PocketActions(
     val migrateAccountStorage: MigrateAccountStorageUseCase,
     val deleteSavedPin: DeleteSavedPinUseCase,
     val deleteAccount: DeleteAccountUseCase,
+    val extractMaxAccount: ExtractMaxAccountUseCase,
+    val checkRootEnvironment: CheckRootEnvironmentUseCase,
 )

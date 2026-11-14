@@ -13,6 +13,7 @@ val uiModule = module {
             accountState = get(), savedPinState = get(), importAccount = get(), replaceAccount = get(),
             generateQr = get(), savePin = get(), migrateAccountStorage = get(),
             deleteSavedPin = get(), deleteAccount = get(),
+            extractMaxAccount = get(), checkRootEnvironment = get(),
         )
     }
     single { PinProtectionPreferences(androidContext()) }

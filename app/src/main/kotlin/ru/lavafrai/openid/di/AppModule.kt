@@ -6,6 +6,7 @@ import ru.lavafrai.openid.data.repositories.account.impl.di.accountRepositoryMod
 import ru.lavafrai.openid.data.repositories.digitalid.impl.di.digitalIdRepositoryModule
 import ru.lavafrai.openid.data.repositories.importing.impl.di.importRepositoryModule
 import ru.lavafrai.openid.data.repositories.max.impl.di.maxSessionRepositoryModule
+import ru.lavafrai.openid.data.repositories.maximport.impl.di.rootImportRepositoryModule
 import ru.lavafrai.openid.data.repositories.pin.impl.di.pinRepositoryModule
 
 val appModule = module {
@@ -17,6 +18,7 @@ val appModule = module {
         pinRepositoryModule,
         maxSessionRepositoryModule,
         digitalIdRepositoryModule,
+        rootImportRepositoryModule,
         uiModule,
     )
 }

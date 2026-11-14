@@ -24,6 +24,9 @@ material-symbols = "2.2.1"
 
 [libraries]
 qrose = { module = "io.github.alexzhirkevich:qrose", version.ref = "qrose" }
+kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
+kotlin-test-junit = { module = "org.jetbrains.kotlin:kotlin-test-junit", version.ref = "kotlin" }
+junit = { module = "junit:junit", version = "4.13.2" }
 materialkolor = { module = "com.materialkolor:material-kolor", version.ref = "materialkolor" }
 material-symbols-rounded = { module = "com.composables:icons-material-symbols-rounded-android", version.ref = "material-symbols" }
 kotlin-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }

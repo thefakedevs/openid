@@ -3,6 +3,7 @@ package ru.lavafrai.openid.ui
 import androidx.annotation.StringRes
 import javax.crypto.Cipher
 import ru.lavafrai.openid.R
+import ru.lavafrai.openid.data.repositories.maximport.api.RootImportStage
 import ru.lavafrai.openid.domain.models.QrGenerationStage
 import ru.lavafrai.openid.models.account.AccountSummary
 import ru.lavafrai.openid.models.auth.AuthenticationFailure
@@ -10,8 +11,10 @@ import ru.lavafrai.openid.models.digitalid.QrSession
 import ru.lavafrai.openid.models.errors.FailureDiagnostic
 import ru.lavafrai.openid.models.pin.PinProtection
 import ru.lavafrai.openid.models.pin.SavedPinState
+import ru.lavafrai.openid.navigation.ImportMethod
 import ru.lavafrai.openid.navigation.ImportMode
 import ru.lavafrai.openid.navigation.PocketDestination
+import ru.lavafrai.openid.navigation.RootSource
 
 data class ImportForm(
     val link: String = "",
@@ -19,6 +22,8 @@ data class ImportForm(
 ) {
     override fun toString(): String = "ImportForm(<redacted>)"
 }
+
+enum class RootCheckState { IDLE, CHECKING, AVAILABLE, UNAVAILABLE }
 
 enum class AuthKind(@StringRes val titleRes: Int) {
     LEGACY_PROFILE_MIGRATION(R.string.auth_migration_title),
@@ -44,6 +49,12 @@ data class PocketUiState(
     val account: AccountSummary? = null,
     val savedPin: SavedPinState = SavedPinState.Loading,
     val importMode: ImportMode = ImportMode.NEW,
+    val importMethod: ImportMethod? = null,
+    val rootSource: RootSource? = null,
+    val rootCheck: RootCheckState = RootCheckState.IDLE,
+    val maxInstalled: Boolean = true,
+    val dfRootInstalled: Boolean = false,
+    val rootStage: RootImportStage? = null,
     val importForm: ImportForm = ImportForm(),
     val accountMigrationRequired: Boolean = false,
     val unlockPinProtection: PinProtection = PinProtection.NOT_SAVED,
@@ -61,13 +72,16 @@ data class PocketUiState(
     val confirmDelete: Boolean = false,
     val authPrompt: AuthRequest? = null,
 ) {
-    val editingImport: Boolean get() = destination == PocketDestination.IMPORT || destination == PocketDestination.SETUP
+    val editingImport: Boolean get() =
+        destination == PocketDestination.METHOD || destination == PocketDestination.IMPORT ||
+            destination == PocketDestination.ROOT_SOURCE || destination == PocketDestination.SETUP
     val busy: Boolean get() = screenBusy || (!editingImport && session.opening)
     val error: PocketError? get() = screenError ?: session.error.takeUnless { editingImport }
     val qr: QrSession? get() = session.qr
     val qrStage: QrGenerationStage? get() = session.stage
     val qrRefreshAtMillis: Long? get() = session.refreshAtMillis
     val qrRefreshIntervalMillis: Long get() = session.refreshIntervalMillis
+    val rootAvailable: Boolean get() = rootCheck == RootCheckState.AVAILABLE
     val pinProtection: PinProtection get() = when (destination) {
         PocketDestination.SETUP -> setupPinProtection
         PocketDestination.SETTINGS -> settings?.selection ?: unlockPinProtection
@@ -82,9 +96,11 @@ data class PocketUiState(
 
     val hasBack: Boolean get() = destination in setOf(
         PocketDestination.SETUP,
+        PocketDestination.ROOT_SOURCE,
         PocketDestination.QR,
         PocketDestination.SETTINGS,
-    ) || (destination == PocketDestination.IMPORT && importMode == ImportMode.REPLACE)
+    ) || destination == PocketDestination.IMPORT ||
+        (destination == PocketDestination.METHOD && importMode == ImportMode.REPLACE)
 
     override fun toString(): String = "PocketUiState(destination=$destination, busy=$busy, secrets=<redacted>)"
 }
@@ -95,6 +111,16 @@ sealed interface PocketAction {
     data class EditPassword(val value: String) : PocketAction
 
     data class EditPin(val value: String) : PocketAction
+
+    data class SelectImportMethod(val value: ImportMethod) : PocketAction
+
+    data object ContinueImportMethod : PocketAction
+
+    data class SelectRootSource(val value: RootSource) : PocketAction
+
+    data object ContinueRootImport : PocketAction
+
+    data object RefreshRootCheck : PocketAction
 
     data object MigrateAccountStorage : PocketAction
 

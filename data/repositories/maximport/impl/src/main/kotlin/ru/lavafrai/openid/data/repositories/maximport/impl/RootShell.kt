@@ -14,25 +14,32 @@ import kotlinx.coroutines.withContext
 internal class RootShell(private val io: kotlinx.coroutines.CoroutineDispatcher = Dispatchers.IO) {
     suspend fun available(): Boolean = withContext(io) {
         runCatching {
-            execute("id", PROBE_TIMEOUT_MILLIS)?.toString(Charsets.UTF_8)?.contains("uid=0(") == true
+            execute("id", PROBE_TIMEOUT_MILLIS, ignoreExitCode = false)
+                ?.toString(Charsets.UTF_8)
+                ?.contains("uid=0(") == true
         }.getOrDefault(false)
     }
 
     suspend fun text(
         command: String,
         timeoutMillis: Long = DEFAULT_TIMEOUT_MILLIS,
+        ignoreExitCode: Boolean = false,
     ): String? = withContext(io) {
-        binary(command, timeoutMillis)?.toString(Charsets.UTF_8)
+        binary(command, timeoutMillis, ignoreExitCode)?.toString(Charsets.UTF_8)
     }
 
     suspend fun binary(
         command: String,
         timeoutMillis: Long = DEFAULT_TIMEOUT_MILLIS,
+        ignoreExitCode: Boolean = false,
     ): ByteArray? = withContext(io) {
-        runCatching { execute(command, timeoutMillis) }.getOrNull()
+        runCatching { execute(command, timeoutMillis, ignoreExitCode) }.getOrNull()
     }
 
-    /** Reads [byteCount] bytes of a process memory region page-by-page through dd. */
+    /**
+     * Reads [byteCount] bytes of a process memory region page-by-page through dd.
+     * Short reads at unmapped holes keep the bytes collected so far and stop the region.
+     */
     suspend fun readMemory(
         pid: Int,
         startAddress: Long,
@@ -47,24 +54,27 @@ internal class RootShell(private val io: kotlinx.coroutines.CoroutineDispatcher 
             val batch = minOf(pages - offset, READ_PAGES_PER_COMMAND)
             val chunk = runCatching {
                 execute(
-                    "dd if=/proc/$pid/mem bs=4096 skip=$((firstPage + offset)) count=$batch 2>/dev/null",
+                    "dd if=/proc/$pid/mem bs=4096 skip=$((firstPage + offset)) count=$batch",
                     READ_TIMEOUT_MILLIS,
+                    ignoreExitCode = false,
                 )
             }.getOrNull() ?: return@withContext false
-            if (chunk.size < batch * pageSize) {
-                // Short reads mean an unmapped hole inside the region; stop this region gracefully.
-                if (chunk.isEmpty()) return@withContext false
-            }
+            if (chunk.isEmpty()) return@withContext false
             onChunk(chunk)
             offset += batch
         }
         true
     }
 
-    /** Null on timeout, denied access, a non-zero exit code or any launch failure. */
+    /**
+     * KernelSU's kernel sucompat executes app-issued commands directly, without a shell, so
+     * commands must never rely on quotes, redirections or `&&`. A non-zero exit still yields
+     * partial output when [ignoreExitCode] is set; find and grep use that for partial results.
+     */
     private fun execute(
         command: String,
         timeoutMillis: Long,
+        ignoreExitCode: Boolean,
     ): ByteArray? {
         val process = ProcessBuilder("su", "-c", command).start()
         val output = ByteArrayOutputStream()
@@ -78,7 +88,9 @@ internal class RootShell(private val io: kotlinx.coroutines.CoroutineDispatcher 
             }
             reader.join(TimeUnit.SECONDS.toMillis(2))
             errorDrainer.join(TimeUnit.SECONDS.toMillis(1))
-            if (process.exitValue() != 0) return null
+            val code = process.exitValue()
+            if (code != 0 && !ignoreExitCode) return null
+            if (code != 0 && output.size() == 0) return null
             return output.toByteArray()
         } finally {
             process.destroyForcibly()

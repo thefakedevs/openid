@@ -185,14 +185,15 @@ internal class MaxRootImportRepository(
         var totalBytes = 0L
         for ((subdirectory, pattern) in PREFERENCE_DIRECTORIES) {
             val directory = "$dataRoot/$subdirectory"
+            // No quotes, redirections or && here: app-issued su commands run without a shell.
             val listing = shell.text(
-                "find '$directory' -maxdepth 1 -type f -name '$pattern' -print0 2>/dev/null",
+                "find $directory -maxdepth 1 -type f -name $pattern -print0",
+                ignoreExitCode = true,
             ) ?: continue
             for (path in listing.split('\u0000')) {
                 if (files >= MAX_FILES || totalBytes >= MAX_TOTAL_BYTES) break
                 if (!path.startsWith(directory)) continue
-                val quoted = shellQuote(path)
-                val raw = shell.binary("[ ! -L $quoted ] && head -c ${MAX_FILE_BYTES + 1} $quoted") ?: continue
+                val raw = shell.binary("head -c ${MAX_FILE_BYTES + 1} $path", ignoreExitCode = true) ?: continue
                 if (raw.size > MAX_FILE_BYTES) continue
                 files++
                 totalBytes += raw.size
@@ -225,16 +226,16 @@ internal class MaxRootImportRepository(
         user: Int,
         material: DidMaterialBuilder,
     ) {
-        val webviewRoot = shellQuote("/data/user/$user/${RootImportPackages.MAX}/app_webview")
+        val webviewRoot = "/data/user/$user/${RootImportPackages.MAX}/app_webview"
         val listing = shell.text(
-            "find $webviewRoot -type f -path '*leveldb*' -size -${MAX_FILE_BYTES + 1}c -print0 2>/dev/null",
+            "find $webviewRoot -type f -path *leveldb* -size -${MAX_FILE_BYTES + 1}c -print0",
             timeoutMillis = READ_TIMEOUT_MILLIS,
+            ignoreExitCode = true,
         ) ?: return
         var files = 0
         for (path in listing.split('\u0000')) {
             if (!path.contains("leveldb") || files >= MAX_FILES) continue
-            val quoted = shellQuote(path)
-            val raw = shell.binary("[ ! -L $quoted ] && head -c ${MAX_FILE_BYTES + 1} $quoted") ?: continue
+            val raw = shell.binary("head -c ${MAX_FILE_BYTES + 1} $path", ignoreExitCode = true) ?: continue
             if (raw.size > MAX_FILE_BYTES) continue
             files++
             val values = LocalStorageCodec.scan(raw, setOf(KEY_PIN_SALT, KEY_CREATION_TIMESTAMP))
@@ -250,18 +251,18 @@ internal class MaxRootImportRepository(
         records: List<PrefRecord>,
         material: DidMaterialBuilder,
     ) {
-        val dataRoot = shellQuote("/data/user/$user/${RootImportPackages.MAX}")
+        val dataRoot = "/data/user/$user/${RootImportPackages.MAX}"
         val listing = shell.text(
-            "grep -rls -e '$KEY_PIN_SALT' -e '$KEY_CREATION_TIMESTAMP' $dataRoot" +
-                " --exclude-dir=cache --exclude-dir=code_cache --exclude-dir=no_backup 2>/dev/null",
+            "grep -rls -e $KEY_PIN_SALT -e $KEY_CREATION_TIMESTAMP $dataRoot" +
+                " --exclude-dir=cache --exclude-dir=code_cache --exclude-dir=no_backup",
             timeoutMillis = SWEEP_TIMEOUT_MILLIS,
+            ignoreExitCode = true,
         ) ?: return
         var files = 0
         for (path in listing.split('\n')) {
             if (files >= MAX_FILES) break
             if (!path.startsWith("/data/user/$user/${RootImportPackages.MAX}")) continue
-            val quoted = shellQuote(path)
-            val raw = shell.binary("[ ! -L $quoted ] && head -c ${MAX_FILE_BYTES + 1} $quoted") ?: continue
+            val raw = shell.binary("head -c ${MAX_FILE_BYTES + 1} $path", ignoreExitCode = true) ?: continue
             if (raw.size > MAX_FILE_BYTES) continue
             files++
             when {
@@ -316,8 +317,6 @@ internal class MaxRootImportRepository(
         requireData(values.size <= 1, "MAX_SESSION_AMBIGUOUS")
         return values.singleOrNull()
     }
-
-    private fun shellQuote(path: String): String = "'${path.replace("'", "'\\''")}'"
 
     /** Exact session keys first; biometry hints come from the walk-back fragment scan. */
     private fun parsePrefs(raw: ByteArray): List<PrefRecord> =

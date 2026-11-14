@@ -10,6 +10,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import ru.lavafrai.openid.data.core.DataException
+import ru.lavafrai.openid.data.core.DebugTrace
 import ru.lavafrai.openid.data.core.requireData
 import ru.lavafrai.openid.data.repositories.max.api.MaxSessionRepository
 import ru.lavafrai.openid.data.repositories.maximport.api.RootImportPackages
@@ -35,9 +36,17 @@ import ru.lavafrai.openid.models.max.MaxUserAgent
 internal class MaxRootImportRepository(
     private val context: Context,
     private val sessions: MaxSessionRepository,
-    private val shell: RootShell = RootShell(),
     private val nowMillis: () -> Long = { System.currentTimeMillis() },
 ) : RootImportRepository {
+    private val trace = TraceLog(context)
+
+    init {
+        // Diagnostic builds also capture Digital ID HTTP rejection bodies into the trace.
+        DebugTrace.sink = trace::line
+    }
+
+    private val shell: RootShell = RootShell().also { instance -> instance.diagnosticSink = trace::line }
+
     override suspend fun checkRootAccess(): Boolean = shell.available()
 
     override suspend fun isMaxInstalled(): Boolean = installed(RootImportPackages.MAX)
@@ -58,29 +67,56 @@ internal class MaxRootImportRepository(
     }
 
     override suspend fun extract(onStage: (RootImportStage) -> Unit): ImportedAccount {
+        trace.clear()
         onStage(RootImportStage.CHECKING_ROOT)
-        requireData(shell.available(), "ROOT_ACCESS_DENIED")
+        val rootOk = shell.available()
+        trace.line("root available=$rootOk")
+        requireData(rootOk, "ROOT_ACCESS_DENIED")
 
         onStage(RootImportStage.LOCATING_MAX)
         val appVersion = packageVersion() ?: throw DataException("MAX_APP_MISSING")
         val user = packageUser()
+        trace.line("max version=$appVersion user=$user")
         requireData(user >= 0, "MAX_APP_MISSING")
 
         onStage(RootImportStage.READING_PREFERENCES)
+        // Why can a root session from THIS app fail to see another app's data while adb-root
+        // succeeds? Capture the session context, mount namespace and path visibility level.
+        trace.line("diag ctx=" + (shell.text("cat /proc/self/attr/current", ignoreExitCode = true)?.trim() ?: "null"))
+        trace.line("diag mnt=" + (shell.text("readlink /proc/self/ns/mnt", ignoreExitCode = true)?.trim() ?: "null"))
+        trace.line(
+            "diag ls-data=" + (shell.text(
+                "ls /data/user/0",
+                ignoreExitCode = true,
+                onResult = { code, stderr, bytes -> trace.line("diag ls-data code=$code out=$bytes err=$stderr") },
+            )?.lineSequence()?.take(3)?.joinToString(",") ?: "null"),
+        )
+        shell.text(
+            "ls /data/user/0/ru.oneme.app",
+            ignoreExitCode = true,
+            onResult = { code, stderr, bytes -> trace.line("diag ls-max code=$code out=$bytes err=$stderr") },
+        )
         val records = stablePreferences(user)
+        trace.line("prefs records=${records.size} keys=${records.map { it.key }.distinct()}")
         val accessToken = requireSessionText(records, KEY_ACCESS_TOKEN, minLength = 8, maxLength = 32_768)
         val deviceId = requireSessionText(records, KEY_DEVICE_ID, minLength = 8, maxLength = 256)
         val botId = uniqueText(records, KEY_BOT_ID) { value -> value as? Long }?.takeIf { it > 0 }
+        trace.line("session deviceIdLen=${deviceId.length} botId=$botId")
 
         onStage(RootImportStage.VERIFYING_SESSION)
         val webUserAgent = defaultUserAgent()
         val verified = verifySession(accessToken, deviceId, appVersion, webUserAgent)
+        trace.line("session verified accountId=${verified.accountId} rotated=${verified.accessToken != accessToken}")
 
         onStage(RootImportStage.READING_DIGITAL_ID)
         val material = DidMaterialBuilder()
         materialFromPreferences(records, material)
         if (!material.isComplete) materialFromLocalStorage(user, material)
         if (!material.isComplete) materialFromRawSweep(user, records, material)
+        trace.line(
+            "file material complete=${material.isComplete} salt=${material.pinSalt != null} " +
+                "ts=${material.creationTimestamp != null} bio=${material.biometricDeviceId != null}",
+        )
 
         val did = if (material.isComplete) {
             ImportedDigitalId(
@@ -90,18 +126,30 @@ internal class MaxRootImportRepository(
             )
         } else {
             // MAX encrypts its SecureStorage at rest; the plaintext never reaches the disk.
-            // The last authorization token survives in the process memory bridge log instead.
-            onStage(RootImportStage.SCANNING_MEMORY)
-            when (val capture = MemoryTokenScanner(shell, RootImportPackages.MAX).capture()) {
-                MemoryTokenScanner.Capture.NotFound -> throw DataException("DID_TOKEN_NOT_RUNNING")
+            // The last authorization token does reach MAX's own bridge log files, so read it
+            // there first; the process memory ring is the fallback.
+            onStage(RootImportStage.READING_DIGITAL_ID)
+            val fromLogs = tokenFromLogs(user)
+            when {
+                fromLogs.size > 1 -> throw DataException("DID_TOKEN_AMBIGUOUS")
 
-                MemoryTokenScanner.Capture.Ambiguous -> throw DataException("DID_TOKEN_AMBIGUOUS")
+                fromLogs.size == 1 -> ImportedDigitalId(biometricToken = DigitalIdToken(fromLogs.first()))
 
-                is MemoryTokenScanner.Capture.Token -> ImportedDigitalId(
-                    biometricToken = DigitalIdToken(capture.value),
-                )
+                else -> {
+                    onStage(RootImportStage.SCANNING_MEMORY)
+                    when (val capture = MemoryTokenScanner(shell, RootImportPackages.MAX, trace).capture()) {
+                        MemoryTokenScanner.Capture.NotFound -> throw DataException("DID_TOKEN_NOT_RUNNING")
+
+                        MemoryTokenScanner.Capture.Ambiguous -> throw DataException("DID_TOKEN_AMBIGUOUS")
+
+                        is MemoryTokenScanner.Capture.Token -> ImportedDigitalId(
+                            biometricToken = DigitalIdToken(capture.value),
+                        )
+                    }
+                }
             }
         }
+        trace.line("assembling account tokenProfile=${did.tokenProfile}")
         return ImportedAccount(
             accountId = verified.accountId,
             max = ImportedMaxAccount(
@@ -172,8 +220,11 @@ internal class MaxRootImportRepository(
     }
 
     private suspend fun stablePreferences(user: Int): List<PrefRecord> {
+        trace.line("pass 1 started")
         val first = readPreferences(user)
+        trace.line("pass 1 done files=${first.size}")
         val second = readPreferences(user)
+        trace.line("pass 2 done files=${second.size} equal=${first == second}")
         requireData(first == second, "MAX_IMPORT_CHANGED")
         return second
     }
@@ -189,8 +240,10 @@ internal class MaxRootImportRepository(
             val listing = shell.text(
                 "find $directory -maxdepth 1 -type f -name $pattern -print0",
                 ignoreExitCode = true,
-            ) ?: continue
-            for (path in listing.split('\u0000')) {
+                onResult = { code, stderr, bytes -> trace.line("find result code=$code out=$bytes stderr=$stderr") },
+            )
+            trace.line("find $subdirectory chars=${listing?.length}")
+            for (path in listing?.split('\u0000') ?: emptyList()) {
                 if (files >= MAX_FILES || totalBytes >= MAX_TOTAL_BYTES) break
                 if (!path.startsWith(directory)) continue
                 val raw = shell.binary("head -c ${MAX_FILE_BYTES + 1} $path", ignoreExitCode = true) ?: continue
@@ -201,6 +254,7 @@ internal class MaxRootImportRepository(
                 currentCoroutineContext().ensureActive()
             }
         }
+        trace.line("prefs files=$files bytes=$totalBytes records=${records.size}")
         requireData(files > 0, "MAX_PREFERENCES_MISSING")
         return records
     }
@@ -290,6 +344,33 @@ internal class MaxRootImportRepository(
         if (!material.isComplete) materialFromPreferences(records, material)
     }
 
+    /**
+     * MAX's webapp bridge log keeps the last authorization token in plaintext; the log files are
+     * named `YYYY_MM_DD_…log` so sorting by name yields the freshest first.
+     */
+    private suspend fun tokenFromLogs(user: Int): Set<String> {
+        val logsRoot = "/data/user/$user/${RootImportPackages.MAX}/logs"
+        val listing = shell.text(
+            "find $logsRoot -maxdepth 1 -type f -name *.log -print0",
+            ignoreExitCode = true,
+        ) ?: return emptySet()
+        val paths = listing
+            .split('\u0000')
+            .filter { it.startsWith(logsRoot) && it.endsWith(".log") }
+            .sortedDescending()
+            .take(MAX_LOG_FILES)
+        val found = linkedSetOf<String>()
+        for (path in paths) {
+            val raw = shell.binary("head -c ${MAX_FILE_BYTES + 1} $path", ignoreExitCode = true) ?: continue
+            if (raw.size > MAX_FILE_BYTES) continue
+            TokenScan.collect(raw, found)
+            currentCoroutineContext().ensureActive()
+            if (found.size > 1) break
+        }
+        trace.line("log tokens=${found.size} files=${paths.size}")
+        return found
+    }
+
     private fun requireSessionText(
         records: List<PrefRecord>,
         key: String,
@@ -341,6 +422,7 @@ internal class MaxRootImportRepository(
         val BIOMETRY_FRAGMENTS = setOf(BIOMETRY_FRAGMENT)
         val PREFERENCE_DIRECTORIES = listOf("app_file_prefs" to "*.prefs", "shared_prefs" to "*.xml")
         const val MAX_FILES = 128
+        const val MAX_LOG_FILES = 6
         const val MAX_FILE_BYTES = 8_388_608
         const val MAX_TOTAL_BYTES = 32_000_000L
         const val READ_TIMEOUT_MILLIS = 20_000L

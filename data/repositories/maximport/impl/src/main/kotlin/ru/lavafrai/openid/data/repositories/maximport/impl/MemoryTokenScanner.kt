@@ -1,4 +1,4 @@
-package ru.lavafrai.openid.data.repositories.maximport.impl
+﻿package ru.lavafrai.openid.data.repositories.maximport.impl
 
 /**
  * Captures the last Digital ID authorization token from the MAX process memory. The token is a
@@ -9,6 +9,7 @@ package ru.lavafrai.openid.data.repositories.maximport.impl
 internal class MemoryTokenScanner(
     private val shell: RootShell,
     private val packageName: String,
+    private val trace: TraceLog,
 ) {
     private val prefix = TOKEN_PREFIX.toByteArray(Charsets.US_ASCII)
 
@@ -25,45 +26,36 @@ internal class MemoryTokenScanner(
 
     suspend fun capture(): Capture {
         val pid = shell.text("pidof $packageName")?.trim()?.lineSequence()?.firstOrNull()?.trim()?.toIntOrNull()
-            ?: return Capture.NotFound
-        val maps = shell.text("cat /proc/$pid/maps") ?: return Capture.NotFound
+        trace.line("scan pid=$pid")
+        if (pid == null) return Capture.NotFound
+        val maps = shell.text("cat /proc/$pid/maps")
+        trace.line("maps chars=${maps?.length}")
+        if (maps == null) return Capture.NotFound
+        val regions = regions(maps)
+        trace.line("regions preferred=${regions.size} fallbackBytes=${regions.sumOf { it.second }}")
         val found = linkedSetOf<String>()
-        for ((start, size) in regions(maps)) {
+        var scanned = 0L
+        var failures = 0
+        for ((index, region) in regions.withIndex()) {
+            val (start, size) = region
             var carry = ByteArray(0)
             val readable = shell.readMemory(pid, start, size) { chunk ->
                 val window = carry + chunk
-                collectTokens(window, found)
-                carry = window.copyOfRange(maxOf(0, window.size - CARRY_BYTES), window.size)
+                TokenScan.collect(window, found)
+                carry = TokenScan.carryOver(window)
+                scanned += chunk.size
             }
-            if (!readable) continue
+            if (!readable) {
+                failures++
+                trace.line("region $index unreadable start=$start size=$size")
+            }
+            if (found.size > 1) break
         }
+        trace.line("scan done scanned=$scanned distinct=${found.size} failures=$failures")
         return when (found.size) {
             1 -> Capture.Token(found.first())
             0 -> Capture.NotFound
             else -> Capture.Ambiguous
-        }
-    }
-
-    /** Scans ascending; identical duplicates collapse, different values make the capture ambiguous. */
-    private fun collectTokens(
-        bytes: ByteArray,
-        found: MutableCollection<String>,
-    ) {
-        val first = prefix[0]
-        var index = 0
-        while (index <= bytes.size - TOKEN_LENGTH) {
-            if (bytes[index] != first) {
-                index++
-                continue
-            }
-            var offset = 1
-            while (offset < prefix.size && bytes[index + offset] == prefix[offset]) offset++
-            if (offset == prefix.size) {
-                bytes.decodeAscii(index + prefix.size, TOKEN_HEX_LENGTH)?.let { found += it }
-                index += prefix.size
-            } else {
-                index++
-            }
         }
     }
 
@@ -92,20 +84,6 @@ internal class MemoryTokenScanner(
         return preferred + fallback
     }
 
-    private fun ByteArray.decodeAscii(
-        start: Int,
-        length: Int,
-    ): String? {
-        val chars = CharArray(length)
-        for (index in 0 until length) {
-            val byte = this[start + index].toInt() and 0xFF
-            val isHex = byte in 0x30..0x39 || byte in 0x61..0x66
-            if (!isHex) return null
-            chars[index] = byte.toChar()
-        }
-        return String(chars)
-    }
-
     private companion object {
         const val TOKEN_PREFIX = "v.3.1:"
         const val TOKEN_HEX_LENGTH = 64
@@ -114,3 +92,4 @@ internal class MemoryTokenScanner(
         const val MAX_REGION_BYTES = 8L * 1024 * 1024 * 1024
     }
 }
+

@@ -5,6 +5,7 @@ import java.util.WeakHashMap
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import ru.lavafrai.openid.data.core.AccountCodec
+import ru.lavafrai.openid.data.core.DebugTrace
 import ru.lavafrai.openid.data.core.DataException
 import ru.lavafrai.openid.data.core.StrictJson
 import ru.lavafrai.openid.data.core.requireData
@@ -28,6 +29,12 @@ class DigitalIdRepositoryImpl internal constructor(private val http: DigitalIdHt
     ): Map<String, Any?> {
         token?.let { AccountCodec.requireNonEmptyString(it.value) }
         val reply = http.call(launch, method, path, token?.value)
+        if (reply.status !in 200..299) {
+            DebugTrace.line(
+                "http $method $path status=${reply.status} body=" +
+                    String(reply.body, Charsets.UTF_8).take(200),
+            )
+        }
         requireData(reply.status in 200..299, "DIGITAL_ID_HTTP_REJECTED_${reply.status}")
         requireData(
             reply.encoding == null || reply.encoding.equals("identity", ignoreCase = true),
@@ -60,10 +67,21 @@ class DigitalIdRepositoryImpl internal constructor(private val http: DigitalIdHt
         token: DigitalIdToken,
     ): AuthorizationResult = mutex.withLock {
         authorizedTokens.remove(launch)?.fill(0)
-        val status = requestData(launch, "POST", AUTH_PATH, token)["authorization_status"]
+        val status = try {
+            requestData(launch, "POST", AUTH_PATH, token)["authorization_status"]
+        } catch (failure: DataException) {
+            if (failure.code == "DIGITAL_ID_HTTP_REJECTED_400") probeRejection(launch)
+            throw failure
+        }
         requireData(status is Boolean, "DID_AUTHORIZATION_REPLY_INVALID")
         if (status == true) authorizedTokens[launch] = tokenDigest(token)
         AuthorizationResult(status == true)
+    }
+
+    /** Debug-build probe: repeats an authorization with a dummy token to compare rejection bodies. */
+    private suspend fun probeRejection(launch: WebAppLaunch) {
+        val probe = DigitalIdToken("v.3.1:" + "0".repeat(64))
+        runCatching { requestData(launch, "POST", AUTH_PATH, probe) }
     }
 
     override suspend fun getUniversalQr(

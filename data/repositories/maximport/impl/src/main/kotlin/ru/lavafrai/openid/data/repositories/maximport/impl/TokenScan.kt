@@ -34,8 +34,7 @@ internal object TokenScan {
     }
 
     /** Carry tail between chunked reads so a token split across chunks is still found. */
-    fun carryOver(window: ByteArray): ByteArray =
-        window.copyOfRange(maxOf(0, window.size - CARRY_BYTES), window.size)
+    fun carryOver(window: ByteArray): ByteArray = window.copyOfRange(maxOf(0, window.size - CARRY_BYTES), window.size)
 
     private fun decodeHexToken(
         bytes: ByteArray,

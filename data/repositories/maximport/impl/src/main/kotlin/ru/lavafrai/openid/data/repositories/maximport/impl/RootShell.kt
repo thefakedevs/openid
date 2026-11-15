@@ -63,7 +63,11 @@ internal class RootShell(private val io: kotlinx.coroutines.CoroutineDispatcher 
                     READ_TIMEOUT_MILLIS,
                     ignoreExitCode = true,
                     onResult = { code, stderr, bytes ->
-                        if (code != 0) diagnosticSink?.invoke("dd pid=$pid offset=$offset code=$code err=${stderr.take(120)}")
+                        if (code !=
+                            0
+                        ) {
+                            diagnosticSink?.invoke("dd pid=$pid offset=$offset code=$code err=${stderr.take(120)}")
+                        }
                     },
                 )
             }.getOrNull() ?: return@withContext false

@@ -85,11 +85,13 @@ internal class MaxRootImportRepository(
         trace.line("diag ctx=" + (shell.text("cat /proc/self/attr/current", ignoreExitCode = true)?.trim() ?: "null"))
         trace.line("diag mnt=" + (shell.text("readlink /proc/self/ns/mnt", ignoreExitCode = true)?.trim() ?: "null"))
         trace.line(
-            "diag ls-data=" + (shell.text(
-                "ls /data/user/0",
-                ignoreExitCode = true,
-                onResult = { code, stderr, bytes -> trace.line("diag ls-data code=$code out=$bytes err=$stderr") },
-            )?.lineSequence()?.take(3)?.joinToString(",") ?: "null"),
+            "diag ls-data=" + (
+                shell.text(
+                    "ls /data/user/0",
+                    ignoreExitCode = true,
+                    onResult = { code, stderr, bytes -> trace.line("diag ls-data code=$code out=$bytes err=$stderr") },
+                )?.lineSequence()?.take(3)?.joinToString(",") ?: "null"
+                ),
         )
         shell.text(
             "ls /data/user/0/ru.oneme.app",

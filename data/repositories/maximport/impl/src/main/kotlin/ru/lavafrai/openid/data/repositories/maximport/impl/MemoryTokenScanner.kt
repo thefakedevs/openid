@@ -92,4 +92,3 @@ internal class MemoryTokenScanner(
         const val MAX_REGION_BYTES = 8L * 1024 * 1024 * 1024
     }
 }
-

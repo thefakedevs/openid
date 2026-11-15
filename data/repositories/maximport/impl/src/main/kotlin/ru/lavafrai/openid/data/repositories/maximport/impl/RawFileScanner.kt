@@ -5,12 +5,10 @@ import java.nio.charset.CodingErrorAction
 
 /**
  * Best-effort reads of opaque files that contain the SecureStorage key names: extracts the JSON
- * envelope following a key occurrence and UUID-shaped device ids near a fragment occurrence.
+ * envelope following a key occurrence.
  */
 internal object RawFileScanner {
     private const val MAX_WINDOW = 4_096
-    private val UUID_PATTERN =
-        Regex("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 
     fun envelopes(
         raw: ByteArray,
@@ -23,24 +21,6 @@ internal object RawFileScanner {
         while (index >= 0 && found.size < limit) {
             jsonEnvelope(raw, index + keyBytes.size)?.let(found::add)
             index = raw.indexOf(keyBytes, index + 1)
-        }
-        return found
-    }
-
-    fun uuids(
-        raw: ByteArray,
-        fragment: String,
-        limit: Int = 8,
-    ): List<String> {
-        val text = String(raw, Charsets.ISO_8859_1)
-        val found = mutableListOf<String>()
-        var index = text.indexOf(fragment, 0, ignoreCase = true)
-        while (index >= 0 && found.size < limit) {
-            val window = text.substring(index, minOf(text.length, index + 1_024))
-            UUID_PATTERN.findAll(window).forEach { match ->
-                if (found.size < limit && !found.contains(match.value)) found += match.value
-            }
-            index = text.indexOf(fragment, index + fragment.length, ignoreCase = true)
         }
         return found
     }

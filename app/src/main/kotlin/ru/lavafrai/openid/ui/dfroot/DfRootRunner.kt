@@ -10,8 +10,8 @@ import kotlinx.coroutines.withContext
  * contain `libksud.so`. The device may soft-reboot or require a manual reboot afterwards.
  */
 object DfRootRunner {
-    const val SU_MANAGER_PREFS = "dfroot"
-    const val SU_MANAGER_KEY = "su_manager"
+    const val SU_MANAGER_PREFS = ExploitRunner.PREFS_NAME
+    const val SU_MANAGER_KEY = ExploitRunner.PREF_SU_MANAGER
 
     suspend fun run(
         context: Context,

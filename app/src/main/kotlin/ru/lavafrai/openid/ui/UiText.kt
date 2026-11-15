@@ -11,6 +11,10 @@ data class UiText(
     val arguments: List<Any> = emptyList(),
     val direct: String? = null,
 ) {
+    init {
+        require(direct != null || resourceId != 0) { "UiText must have either a resource or a direct string" }
+    }
+
     fun resolve(context: Context): String = direct ?: context.getString(
         resourceId,
         *arguments.map { if (it is UiText) it.resolve(context) else it }.toTypedArray(),

@@ -1,4 +1,4 @@
-﻿package ru.lavafrai.openid.data.repositories.maximport.impl
+package ru.lavafrai.openid.data.repositories.maximport.impl
 
 /**
  * Captures the last Digital ID authorization token from the MAX process memory. The token is a

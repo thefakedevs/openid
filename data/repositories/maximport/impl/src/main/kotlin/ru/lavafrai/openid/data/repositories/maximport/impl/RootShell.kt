@@ -68,7 +68,7 @@ internal class RootShell(private val io: kotlinx.coroutines.CoroutineDispatcher 
             val chunk = runInterruptible(io) {
                 runCatching {
                     execute(
-                        "dd if=/proc/$pid/mem bs=4096 skip=$((firstPage + offset)) count=$batch",
+                        "dd if=/proc/$pid/mem bs=4096 skip=${firstPage + offset} count=$batch",
                         READ_TIMEOUT_MILLIS,
                         ignoreExitCode = true,
                         onResult = { code, stderr, bytes ->

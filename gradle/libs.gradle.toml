@@ -23,35 +23,35 @@ materialkolor = "5.0.1"
 material-symbols = "2.2.1"
 
 [libraries]
-qrose = { module = "io.github.alexzhirkevich:qrose", version.ref = "qrose" }
-xz = { module = "org.tukaani:xz", version = "1.10" }
-kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
-kotlin-test-junit = { module = "org.jetbrains.kotlin:kotlin-test-junit", version.ref = "kotlin" }
-junit = { module = "junit:junit", version = "4.13.2" }
-materialkolor = { module = "com.materialkolor:material-kolor", version.ref = "materialkolor" }
-material-symbols-rounded = { module = "com.composables:icons-material-symbols-rounded-android", version.ref = "material-symbols" }
-kotlin-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
-kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
-msgpack-core = { module = "org.msgpack:msgpack-core", version.ref = "msgpack" }
-lz4-java = { module = "at.yawk.lz4:lz4-java", version.ref = "lz4" }
-okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
-androidx-biometric = { module = "androidx.biometric:biometric", version.ref = "biometric" }
-androidx-fragment = { module = "androidx.fragment:fragment", version.ref = "fragment" }
-androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "core" }
-androidx-lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycle" }
-androidx-lifecycle-viewmodel = { module = "androidx.lifecycle:lifecycle-viewmodel", version.ref = "lifecycle" }
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activity" }
+androidx-biometric = { module = "androidx.biometric:biometric", version.ref = "biometric" }
 androidx-compose-bom = { module = "androidx.compose:compose-bom", version.ref = "compose-bom" }
-androidx-compose-runtime = { module = "androidx.compose.runtime:runtime" }
 androidx-compose-foundation = { module = "androidx.compose.foundation:foundation" }
+androidx-compose-material3 = { module = "androidx.compose.material3:material3", version.ref = "material3" }
+androidx-compose-runtime = { module = "androidx.compose.runtime:runtime" }
 androidx-compose-ui = { module = "androidx.compose.ui:ui" }
 androidx-compose-ui-graphics = { module = "androidx.compose.ui:ui-graphics" }
 androidx-compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling" }
-androidx-compose-material3 = { module = "androidx.compose.material3:material3", version.ref = "material3" }
+androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "core" }
+androidx-fragment = { module = "androidx.fragment:fragment", version.ref = "fragment" }
+androidx-lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycle" }
+androidx-lifecycle-viewmodel = { module = "androidx.lifecycle:lifecycle-viewmodel", version.ref = "lifecycle" }
+androidx-room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
+androidx-room-runtime = { module = "androidx.room:room-runtime", version.ref = "room" }
+junit = { module = "junit:junit", version = "4.13.2" }
 koin-android = { module = "io.insert-koin:koin-android", version.ref = "koin" }
 koin-core = { module = "io.insert-koin:koin-core", version.ref = "koin" }
-androidx-room-runtime = { module = "androidx.room:room-runtime", version.ref = "room" }
-androidx-room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
+kotlin-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
+kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
+kotlin-test-junit = { module = "org.jetbrains.kotlin:kotlin-test-junit", version.ref = "kotlin" }
+kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
+lz4-java = { module = "at.yawk.lz4:lz4-java", version.ref = "lz4" }
+material-symbols-rounded = { module = "com.composables:icons-material-symbols-rounded-android", version.ref = "material-symbols" }
+materialkolor = { module = "com.materialkolor:material-kolor", version.ref = "materialkolor" }
+msgpack-core = { module = "org.msgpack:msgpack-core", version.ref = "msgpack" }
+okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
+qrose = { module = "io.github.alexzhirkevich:qrose", version.ref = "qrose" }
+xz = { module = "org.tukaani:xz", version = "1.10" }
 
 [bundles]
 compose = ["androidx-compose-runtime", "androidx-compose-foundation", "androidx-compose-ui", "androidx-compose-ui-graphics", "androidx-compose-material3"]

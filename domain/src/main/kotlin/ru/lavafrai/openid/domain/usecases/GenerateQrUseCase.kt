@@ -107,18 +107,18 @@ class GenerateQrUseCase(
                 pin = unlockPin(lease.account.accountId, source)
             }
             val launch = openDigitalId(lease, stage)
-            val account2 = lease.account // Includes any token rotation performed by MAX login.
             stage(QrGenerationStage.CHECKING_SECURITY)
-            validateStatus(account2.did, digitalId.getSecurityStatus(launch))
+            val current = lease.account
+            validateStatus(current.did, digitalId.getSecurityStatus(launch))
             val unlocked = pin ?: run {
                 stage(QrGenerationStage.GETTING_PIN)
-                unlockPin(account2.accountId, source).also { pin = it }
+                unlockPin(current.accountId, source).also { pin = it }
             }
-            val token = pinToken(checkNotNull(account2.did.pinSalt), unlocked)
+            val token = pinToken(checkNotNull(current.did.pinSalt), unlocked)
             stage(QrGenerationStage.AUTHORIZING)
             if (!digitalId.authorize(launch, token).authorizationStatus) throw DigitalIdAuthorizationRejectedException()
             stage(QrGenerationStage.SAVING_PIN)
-            VerifiedPin(lease, account2, unlocked).use { onPinVerified(it) }
+            VerifiedPin(lease, current, unlocked).use { onPinVerified(it) }
             return AuthorizedDigitalId(launch, token)
         } finally {
             pin?.close()

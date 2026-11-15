@@ -7,11 +7,12 @@ import android.security.keystore.KeyProperties
 import android.util.Base64
 import androidx.core.content.edit
 import java.security.KeyStore
-import java.security.MessageDigest
 import java.security.SecureRandom
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
+import javax.crypto.SecretKeyFactory
+import javax.crypto.spec.PBEKeySpec
 
 /**
  * A device-local PIN lock for "token profile" accounts: root imports that only captured a bare
@@ -47,7 +48,7 @@ class TokenProfileLock(private val context: Context) {
             putString("hash", hash(pin, salt).encode())
             putBoolean("biometric", biometric)
         }
-        if (biometric) createKey()
+        if (biometric) runCatching { createKey() }
     }
 
     fun verify(
@@ -106,10 +107,12 @@ class TokenProfileLock(private val context: Context) {
         pin: CharArray,
         salt: ByteArray,
     ): ByteArray {
-        val digest = MessageDigest.getInstance("SHA-256")
-        digest.update(salt)
-        digest.update(ByteArray(pin.size) { pin[it].code.toByte() })
-        return digest.digest()
+        val spec = PBEKeySpec(pin, salt, PBKDF2_ITERATIONS, 256)
+        return try {
+            SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded
+        } finally {
+            spec.clearPassword()
+        }
     }
 
     private fun ByteArray.encode(): String = Base64.encodeToString(this, Base64.NO_WRAP)
@@ -118,5 +121,6 @@ class TokenProfileLock(private val context: Context) {
 
     private companion object {
         const val ALIAS = "pocket.token-profile-lock"
+        const val PBKDF2_ITERATIONS = 120_000
     }
 }

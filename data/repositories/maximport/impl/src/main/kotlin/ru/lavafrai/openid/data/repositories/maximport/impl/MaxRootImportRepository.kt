@@ -14,6 +14,7 @@ import kotlinx.coroutines.withContext
 import ru.lavafrai.openid.data.core.DataException
 import ru.lavafrai.openid.data.core.DebugTrace
 import ru.lavafrai.openid.data.core.requireData
+import ru.lavafrai.openid.data.repositories.maximport.impl.BuildConfig
 import ru.lavafrai.openid.data.repositories.max.api.MaxSessionRepository
 import ru.lavafrai.openid.data.repositories.maximport.api.RootImportPackages
 import ru.lavafrai.openid.data.repositories.maximport.api.RootImportRepository
@@ -40,14 +41,17 @@ internal class MaxRootImportRepository(
     private val sessions: MaxSessionRepository,
     private val nowMillis: () -> Long = { System.currentTimeMillis() },
 ) : RootImportRepository {
-    private val trace = TraceLog(context)
+    private val trace = if (BuildConfig.DEBUG) TraceLog(context) else TraceLog.NOOP
 
     init {
-        // Diagnostic builds also capture Digital ID HTTP rejection bodies into the trace.
-        DebugTrace.sink = trace::line
+        if (BuildConfig.DEBUG) {
+            DebugTrace.sink = trace::line
+        }
     }
 
-    private val shell: RootShell = RootShell().also { instance -> instance.diagnosticSink = trace::line }
+    private val shell: RootShell = RootShell().also { instance ->
+        if (BuildConfig.DEBUG) instance.diagnosticSink = trace::line
+    }
 
     override suspend fun checkRootAccess(): Boolean = shell.available()
 
@@ -163,6 +167,7 @@ internal class MaxRootImportRepository(
             }
         }
         trace.line("assembling account tokenProfile=${did.tokenProfile}")
+        trace.clear()
         ImportedAccount(
             accountId = verified.accountId,
             max = ImportedMaxAccount(

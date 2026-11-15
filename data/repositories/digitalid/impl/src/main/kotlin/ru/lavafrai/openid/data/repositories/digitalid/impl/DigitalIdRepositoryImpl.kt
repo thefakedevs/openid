@@ -3,6 +3,7 @@ package ru.lavafrai.openid.data.repositories.digitalid.impl
 import java.security.MessageDigest
 import java.util.WeakHashMap
 import kotlinx.coroutines.sync.Mutex
+import ru.lavafrai.openid.data.repositories.digitalid.impl.BuildConfig
 import kotlinx.coroutines.sync.withLock
 import ru.lavafrai.openid.data.core.AccountCodec
 import ru.lavafrai.openid.data.core.DataException
@@ -75,7 +76,7 @@ class DigitalIdRepositoryImpl internal constructor(private val http: DigitalIdHt
         val status = try {
             requestData(launch, "POST", AUTH_PATH, token)["authorization_status"]
         } catch (failure: DataException) {
-            if (failure.code == "DIGITAL_ID_HTTP_REJECTED_400") probeRejection(launch)
+            if (BuildConfig.DEBUG && failure.code == "DIGITAL_ID_HTTP_REJECTED_400") probeRejection(launch)
             throw failure
         }
         requireData(status is Boolean, "DID_AUTHORIZATION_REPLY_INVALID")

@@ -84,16 +84,4 @@ class RawFileScannerTest {
         assertTrue(RawFileScanner.envelopes(raw, "pin_salt::digitalId").isEmpty())
     }
 
-    @Test
-    fun `finds uuids near the fragment`() {
-        val raw = (
-            "biometry.deviceId::digitalId=\u0000" +
-                "01234567-89ab-cdef-0123-456789abcdef" +
-                "\u0000more"
-            ).toByteArray(Charsets.UTF_8)
-        assertEquals(
-            listOf("01234567-89ab-cdef-0123-456789abcdef"),
-            RawFileScanner.uuids(raw, "biomet"),
-        )
-    }
 }

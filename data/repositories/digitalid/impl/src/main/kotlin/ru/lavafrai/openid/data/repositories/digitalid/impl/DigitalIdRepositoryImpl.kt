@@ -76,18 +76,12 @@ class DigitalIdRepositoryImpl internal constructor(private val http: DigitalIdHt
         val status = try {
             requestData(launch, "POST", AUTH_PATH, token)["authorization_status"]
         } catch (failure: DataException) {
-            if (BuildConfig.DEBUG && failure.code == "DIGITAL_ID_HTTP_REJECTED_400") probeRejection(launch)
+            if (BuildConfig.DEBUG) DebugTrace.line("authorize rejected: ${failure.code}")
             throw failure
         }
         requireData(status is Boolean, "DID_AUTHORIZATION_REPLY_INVALID")
         if (status == true) authorizedTokens[launch] = tokenDigest(token)
         AuthorizationResult(status == true)
-    }
-
-    /** Debug-build probe: repeats an authorization with a dummy token to compare rejection bodies. */
-    private suspend fun probeRejection(launch: WebAppLaunch) {
-        val probe = DigitalIdToken("v.3.1:" + "0".repeat(64))
-        runCatching { requestData(launch, "POST", AUTH_PATH, probe) }
     }
 
     override suspend fun getUniversalQr(

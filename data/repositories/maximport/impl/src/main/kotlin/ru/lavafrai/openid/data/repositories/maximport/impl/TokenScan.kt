@@ -36,6 +36,8 @@ internal object TokenScan {
     /** Carry tail between chunked reads so a token split across chunks is still found. */
     fun carryOver(window: ByteArray): ByteArray = window.copyOfRange(maxOf(0, window.size - CARRY_BYTES), window.size)
 
+    private val PREFIX_STRING = "v.3.1:"
+
     private fun decodeHexToken(
         bytes: ByteArray,
         start: Int,
@@ -47,6 +49,6 @@ internal object TokenScan {
             if (!isHex) return null
             chars[index] = byte.toChar()
         }
-        return String(chars)
+        return PREFIX_STRING + String(chars)
     }
 }

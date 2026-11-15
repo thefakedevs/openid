@@ -111,6 +111,7 @@ internal class MaxRootImportRepository(
         binaryInstalled.await()
         val fridaCapture = injector.capture(
             scope = this@coroutineScope,
+            user = user,
             onAgentReady = { onStage(RootImportStage.READING_DIGITAL_ID) },
         )
         when (fridaCapture) {

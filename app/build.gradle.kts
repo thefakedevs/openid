@@ -47,6 +47,9 @@ android {
         jniLibs {
             // AndroidX ships this library already stripped for every ABI.
             keepDebugSymbols += "**/libandroidx.graphics.path.so"
+            // libdfroot.so and libbootstrap.so are executed as standalone binaries (not loaded
+            // via System.loadLibrary), so they must be extracted to nativeLibraryDir on install.
+            useLegacyPackaging = true
         }
     }
 }

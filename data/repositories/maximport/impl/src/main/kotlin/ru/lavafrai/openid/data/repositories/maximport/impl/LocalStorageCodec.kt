@@ -7,7 +7,7 @@ import java.nio.charset.CodingErrorAction
 /**
  * Scans Chromium WebView levelDB files for mini-app local storage entries. The stored key is
  * `_` + origin + 0x00 + 0x01 + key; the payload follows as a levelDB varint length prefixed by
- * an encoding byte: 0x00 for UTF-8 or 0x01 for UTF-16LE.
+ * an encoding byte: 0x00 for UTF-16LE or 0x01 for Latin-1 (Chromium StorageFormat convention).
  */
 internal object LocalStorageCodec {
     private const val MAX_VALUE_LENGTH = 65_536
@@ -50,8 +50,8 @@ internal object LocalStorageCodec {
         val payload = raw.copyOfRange(position, position + length)
         val encoding = payload[0].toInt() and 0xFF
         return when (encoding) {
-            0x00 -> decode(payload.copyOfRange(1, payload.size), Charsets.UTF_8)
-            0x01 -> if (payload.size % 2 == 1) decode(payload.copyOfRange(1, payload.size), Charsets.UTF_16LE) else null
+            0x00 -> if ((payload.size - 1) % 2 == 0) decode(payload.copyOfRange(1, payload.size), Charsets.UTF_16LE) else null
+            0x01 -> decode(payload.copyOfRange(1, payload.size), Charsets.ISO_8859_1)
             else -> null
         }?.takeIf { it.isNotEmpty() }
     }

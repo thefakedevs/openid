@@ -24,7 +24,8 @@ class PinProtectionPreferences(context: Context) {
     fun save(
         accountId: Long,
         protection: PinProtection,
-        tokenProfile: Boolean = false,
+        tokenProfile: Boolean = preferences.getLong("accountId", -1) == accountId &&
+            preferences.getBoolean("tokenProfile", false),
     ) {
         preferences.edit {
             putLong("accountId", accountId)

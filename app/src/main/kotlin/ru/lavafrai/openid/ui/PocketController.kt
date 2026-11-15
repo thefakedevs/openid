@@ -51,7 +51,7 @@ class PocketController(
     private val authentication = AuthenticationCoordinator { prompt ->
         mutableState.update { it.copy(authPrompt = prompt) }
     }
-    private val attempts = PinAttemptLimiter(scope, nowMillis) { seconds ->
+    private val attempts = PinAttemptLimiter(context, scope, nowMillis) { seconds ->
         mutableState.update { it.copy(retrySeconds = seconds) }
     }
     private val imports = ImportFlow(actions.importAccount, actions.replaceAccount, scope, nowMillis, ::expireImport)
@@ -433,10 +433,10 @@ class PocketController(
     private fun commitImport() {
         val current = state.value
         val imported = imports.prepared ?: return
+        val isTokenProfile = imported.did.tokenProfile || current.tokenProfile
         runOperation(ErrorOperation.IMPORT, ErrorRecovery.IMPORT, durable = true) {
-            // Only the explicit save ends the previous session and permits replacing storage.
             replacementSettings = null
-            finishCommit(imported, current.importMode, current.pinProtection, current.tokenProfile)
+            finishCommit(imported, current.importMode, current.pinProtection, isTokenProfile)
         }
     }
 
@@ -808,6 +808,7 @@ class PocketController(
                 val settings = replacementSettings
                 replacementSettings = null
                 imports.clear()
+                val accountId = state.value.account?.accountId
                 mutableState.update {
                     it.copy(
                         destination = if (settings != null) PocketDestination.SETTINGS else PocketDestination.UNLOCK,
@@ -815,6 +816,11 @@ class PocketController(
                         importMethod = null,
                         importForm = ImportForm(),
                         unlockPinProtection = effectivePinProtection(),
+                        tokenProfile = accountId != null && pinPreferences.isTokenProfile(accountId),
+                        tokenLockConfigured = accountId != null && tokenLock.isConfigured(accountId),
+                        tokenLockBiometricAvailable = accountId != null &&
+                            tokenLock.biometricEnabled(accountId) &&
+                            VaultAuthentication.unavailable(context, VaultProtection.BIOMETRIC) == null,
                         settings = settings?.pin,
                         replaceSavedPin = settings?.replaceSavedPin == true || it.replaceSavedPin,
                         message = null,
@@ -869,6 +875,7 @@ class PocketController(
 
     private fun expireImport() {
         imports.clear()
+        val accountId = state.value.account?.accountId
         mutableState.update {
             it.copy(
                 destination = if (it.account == null) PocketDestination.METHOD else PocketDestination.UNLOCK,
@@ -877,9 +884,11 @@ class PocketController(
                 rootSource = null,
                 rootCheck = RootCheckState.IDLE,
                 rootStage = null,
-                tokenProfile = false,
-                tokenLockConfigured = false,
-                tokenLockBiometricAvailable = false,
+                tokenProfile = accountId != null && pinPreferences.isTokenProfile(accountId),
+                tokenLockConfigured = accountId != null && tokenLock.isConfigured(accountId),
+                tokenLockBiometricAvailable = accountId != null &&
+                    tokenLock.biometricEnabled(accountId) &&
+                    VaultAuthentication.unavailable(context, VaultProtection.BIOMETRIC) == null,
                 importForm = ImportForm(),
                 screenError = null,
                 message = null,

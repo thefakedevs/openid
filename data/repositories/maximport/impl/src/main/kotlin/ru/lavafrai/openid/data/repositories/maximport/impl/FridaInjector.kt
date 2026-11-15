@@ -28,7 +28,7 @@ internal class FridaInjector(
     private val shell: RootShell,
     private val trace: TraceLog,
 ) {
-    private val resultPath = "/data/user/0/ru.oneme.app/cache/openid_did_material.json"
+    private fun resultPath(user: Int) = "/data/user/$user/${RootImportPackages.MAX}/cache/openid_did_material.json"
 
     suspend fun install(): Boolean = withContext(Dispatchers.IO) {
         try {
@@ -77,28 +77,29 @@ internal class FridaInjector(
      */
     suspend fun capture(
         scope: CoroutineScope,
+        user: Int,
         onAgentReady: suspend () -> Unit,
         waitMillis: Long = 60_000L,
     ): Capture {
         val pid = shell.text(
             "pidof ${RootImportPackages.MAX}",
         )?.trim()?.lineSequence()?.firstOrNull()?.trim()?.toIntOrNull()
-        trace.line("frida capture pid=$pid")
+        trace.line("frida capture pid=$pid user=$user")
         if (pid == null) return Capture.Failed("DID_TOKEN_NOT_RUNNING")
         if (!install()) return Capture.Failed("FRIDA_INSTALL_FAILED")
-        shell.text("rm $resultPath", ignoreExitCode = true)
+        val result = resultPath(user)
+        shell.text("rm $result", ignoreExitCode = true)
         val binary = File(context.filesDir, BINARY_NAME).absolutePath
-        val agent = File(context.filesDir, AGENT_NAME).absolutePath
+        val agentPath = patchedAgent(user)
         val injector: Job = scope.launch(Dispatchers.IO) {
             val outcome = shell.text(
-                "$binary -p $pid -s $agent",
+                "$binary -p $pid -s $agentPath",
                 timeoutMillis = waitMillis + AGENT_ARM_MILLIS + 10_000L,
                 ignoreExitCode = true,
             )
             trace.line("frida injector finished len=${outcome?.length ?: -1}")
             trace.line("frida injector output: ${outcome?.take(280) ?: "null"}")
         }
-        // Give the injector time to attach and arm the onResume hook before MAX is foregrounded.
         delay(AGENT_ARM_MILLIS)
         trace.line("frida agent armed, bringing MAX forward")
         onAgentReady()
@@ -106,12 +107,12 @@ internal class FridaInjector(
         var injectorDone = false
         while (System.currentTimeMillis() < deadline) {
             delay(800)
-            val raw = shell.text("cat $resultPath", ignoreExitCode = true)
+            val raw = shell.text("cat $result", ignoreExitCode = true)
             if (!raw.isNullOrEmpty()) {
                 val parsed = parse(raw)
                 if (parsed != null) {
                     injector.cancel()
-                    shell.text("rm $resultPath", ignoreExitCode = true)
+                    shell.text("rm $result", ignoreExitCode = true)
                     trace.line("frida capture result=${parsed.javaClass.simpleName}")
                     return parsed
                 }
@@ -124,6 +125,18 @@ internal class FridaInjector(
         injector.cancel()
         trace.line("frida capture timeout")
         return Capture.Failed("OPEN_DIGITAL_ID_AND_UNLOCK_FIRST")
+    }
+
+    private fun patchedAgent(user: Int): String {
+        val source = File(context.filesDir, AGENT_NAME)
+        if (user == 0) return source.absolutePath
+        val patched = File(context.filesDir, "did-agent-patched.js")
+        val original = source.readText(Charsets.UTF_8)
+        patched.writeText(
+            original.replace(HARDCODED_RESULT_PATH, resultPath(user)),
+            Charsets.UTF_8,
+        )
+        return patched.absolutePath
     }
 
     private fun parse(raw: String): Capture? = try {
@@ -140,6 +153,7 @@ internal class FridaInjector(
     private companion object {
         const val BINARY_NAME = "frida-inject"
         const val AGENT_NAME = "did-agent.js"
+        const val HARDCODED_RESULT_PATH = "/data/user/0/ru.oneme.app/cache/openid_did_material.json"
 
         // Time allowed for frida-inject to attach and the agent to arm its onResume hook before
         // MAX is brought to the foreground. The binary is decompressed ahead of time, so attaching

@@ -13,7 +13,7 @@ class LocalStorageCodecTest {
         value: String,
     ): ByteArray {
         val keyBytes = originPrefix + key.toByteArray(Charsets.US_ASCII)
-        val payload = byteArrayOf(0x00) + value.toByteArray(Charsets.UTF_8)
+        val payload = byteArrayOf(0x01) + value.toByteArray(Charsets.ISO_8859_1)
         return keyBytes + varint(payload.size) + payload
     }
 
@@ -30,7 +30,7 @@ class LocalStorageCodecTest {
     }
 
     @Test
-    fun `reads utf8 values`() {
+    fun `reads latin1 values`() {
         val raw = byteArrayOf(1, 2, 3) + entry("pin_salt::digitalId", "the-salt") + byteArrayOf(9, 9)
         val values = LocalStorageCodec.scan(raw, setOf("pin_salt::digitalId"))
         assertEquals("the-salt", values["pin_salt::digitalId"])
@@ -40,7 +40,7 @@ class LocalStorageCodecTest {
     fun `reads utf16le values`() {
         val keyBytes = originPrefix + "creation_timestamp::digitalId".toByteArray(Charsets.US_ASCII)
         val text = "1735689600000"
-        val payload = byteArrayOf(0x01) + text.toByteArray(Charsets.UTF_16LE)
+        val payload = byteArrayOf(0x00) + text.toByteArray(Charsets.UTF_16LE)
         val raw = keyBytes + varint(payload.size) + payload
         val values = LocalStorageCodec.scan(raw, setOf("creation_timestamp::digitalId"))
         assertEquals(text, values["creation_timestamp::digitalId"])

@@ -9,6 +9,7 @@ package ru.lavafrai.openid.data.repositories.maximport.impl
 internal class MemoryTokenScanner(
     private val shell: RootShell,
     private val packageName: String,
+    private val user: Int,
     private val trace: TraceLog,
 ) {
     private val prefix = TOKEN_PREFIX.toByteArray(Charsets.US_ASCII)
@@ -25,7 +26,7 @@ internal class MemoryTokenScanner(
     }
 
     suspend fun capture(): Capture {
-        val pid = shell.text("pidof $packageName")?.trim()?.lineSequence()?.firstOrNull()?.trim()?.toIntOrNull()
+        val pid = resolveMaxPid()
         trace.line("scan pid=$pid")
         if (pid == null) return Capture.NotFound
         val maps = shell.text("cat /proc/$pid/maps")
@@ -99,6 +100,21 @@ internal class MemoryTokenScanner(
             }
         }
         return preferred to fallback
+    }
+
+    private suspend fun resolveMaxPid(): Int? {
+        val raw = shell.text("pidof $packageName")?.trim() ?: return null
+        val pids = raw.split(Regex("\\s+")).mapNotNull { it.toIntOrNull() }
+        if (pids.isEmpty()) return null
+        if (pids.size == 1) return pids[0]
+        val uidMin = user * 100_000
+        val uidMax = uidMin + 99_999
+        for (pid in pids) {
+            val uidLine = shell.text("stat -c %u /proc/$pid", ignoreExitCode = true)?.trim()
+            val uid = uidLine?.toIntOrNull() ?: continue
+            if (uid in uidMin..uidMax) return pid
+        }
+        return null
     }
 
     private companion object {

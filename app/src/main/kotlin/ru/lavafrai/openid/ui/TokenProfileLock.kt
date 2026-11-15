@@ -70,6 +70,12 @@ class TokenProfileLock(private val context: Context) {
         }.getOrNull()
     }
 
+    fun enableBiometric(accountId: Long) {
+        if (preferences.getLong("accountId", -1) != accountId) return
+        preferences.edit { putBoolean("biometric", true) }
+        runCatching { createKey() }
+    }
+
     /** The Keystore key was invalidated (e.g. biometric enrollment changed); fall back to the typed PIN. */
     fun disableBiometric(accountId: Long) {
         if (preferences.getLong("accountId", -1) != accountId) return

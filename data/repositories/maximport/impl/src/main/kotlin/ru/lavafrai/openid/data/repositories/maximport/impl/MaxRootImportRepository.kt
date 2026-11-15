@@ -155,7 +155,7 @@ internal class MaxRootImportRepository(
 
                 else -> {
                     onStage(RootImportStage.SCANNING_MEMORY)
-                    when (val capture = MemoryTokenScanner(shell, RootImportPackages.MAX, trace).capture()) {
+                    when (val capture = MemoryTokenScanner(shell, RootImportPackages.MAX, user, trace).capture()) {
                         MemoryTokenScanner.Capture.NotFound -> throw DataException("DID_TOKEN_NOT_RUNNING")
 
                         MemoryTokenScanner.Capture.Ambiguous -> throw DataException("DID_TOKEN_AMBIGUOUS")

@@ -433,10 +433,9 @@ class PocketController(
     private fun commitImport() {
         val current = state.value
         val imported = imports.prepared ?: return
-        val isTokenProfile = imported.did.tokenProfile || current.tokenProfile
         runOperation(ErrorOperation.IMPORT, ErrorRecovery.IMPORT, durable = true) {
             replacementSettings = null
-            finishCommit(imported, current.importMode, current.pinProtection, isTokenProfile)
+            finishCommit(imported, current.importMode, current.pinProtection, imported.did.tokenProfile)
         }
     }
 
@@ -452,13 +451,11 @@ class PocketController(
         tokenProfile: Boolean,
     ) {
         qrSession.stopAndWait()
+        // Save profile metadata before the account so a crash after account write still
+        // has the token-profile flag on the next startup.
+        pinPreferences.save(imported.accountId, pinProtection, tokenProfile)
         val summary = imports.commit(imported, mode)
         currentCoroutineContext().ensureActive()
-        pinPreferences.save(
-            summary.accountId,
-            if (tokenProfile) PinProtection.NOT_SAVED else pinProtection,
-            tokenProfile,
-        )
         attempts.reset()
         imports.clear()
         mutableState.update {
@@ -466,6 +463,7 @@ class PocketController(
                 destination = PocketDestination.UNLOCK,
                 account = summary,
                 accountMigrationRequired = false,
+                tokenProfile = tokenProfile,
                 unlockPinProtection = pinProtection,
                 tokenLockConfigured = false,
                 tokenLockBiometricAvailable = false,
@@ -666,11 +664,25 @@ class PocketController(
             }
             currentCoroutineContext().ensureActive()
             pinPreferences.save(account.accountId, current.pinProtection)
+            if (current.tokenProfile && tokenLock.isConfigured(account.accountId)) {
+                val wantBiometric = current.pinProtection == PinProtection.BIOMETRIC &&
+                    VaultAuthentication.unavailable(context, VaultProtection.BIOMETRIC) == null
+                if (wantBiometric && !tokenLock.biometricEnabled(account.accountId)) {
+                    tokenLock.enableBiometric(account.accountId)
+                } else if (!wantBiometric && tokenLock.biometricEnabled(account.accountId)) {
+                    tokenLock.disableBiometric(account.accountId)
+                }
+            }
+            val biometricAvailable = current.tokenProfile &&
+                tokenLock.isConfigured(account.accountId) &&
+                tokenLock.biometricEnabled(account.accountId) &&
+                VaultAuthentication.unavailable(context, VaultProtection.BIOMETRIC) == null
             mutableState.update {
                 it.copy(
                     destination = PocketDestination.UNLOCK,
                     settings = null,
                     unlockPinProtection = current.pinProtection,
+                    tokenLockBiometricAvailable = biometricAvailable,
                     savedPin = if (current.pinProtection == PinProtection.NOT_SAVED) {
                         SavedPinState.NotSaved
                     } else {

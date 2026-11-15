@@ -81,9 +81,7 @@ internal class FridaInjector(
         onAgentReady: suspend () -> Unit,
         waitMillis: Long = 60_000L,
     ): Capture {
-        val pid = shell.text(
-            "pidof ${RootImportPackages.MAX}",
-        )?.trim()?.lineSequence()?.firstOrNull()?.trim()?.toIntOrNull()
+        val pid = resolveMaxPid(user)
         trace.line("frida capture pid=$pid user=$user")
         if (pid == null) return Capture.Failed("DID_TOKEN_NOT_RUNNING")
         if (!install()) return Capture.Failed("FRIDA_INSTALL_FAILED")
@@ -125,6 +123,21 @@ internal class FridaInjector(
         injector.cancel()
         trace.line("frida capture timeout")
         return Capture.Failed("OPEN_DIGITAL_ID_AND_UNLOCK_FIRST")
+    }
+
+    private suspend fun resolveMaxPid(user: Int): Int? {
+        val raw = shell.text("pidof ${RootImportPackages.MAX}")?.trim() ?: return null
+        val pids = raw.split(Regex("\\s+")).mapNotNull { it.toIntOrNull() }
+        if (pids.isEmpty()) return null
+        if (pids.size == 1) return pids[0]
+        val uidMin = user * 100_000
+        val uidMax = uidMin + 99_999
+        for (pid in pids) {
+            val uidLine = shell.text("stat -c %u /proc/$pid", ignoreExitCode = true)?.trim()
+            val uid = uidLine?.toIntOrNull() ?: continue
+            if (uid in uidMin..uidMax) return pid
+        }
+        return null
     }
 
     private fun patchedAgent(user: Int): String {

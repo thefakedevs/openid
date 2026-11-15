@@ -4,18 +4,24 @@ import java.io.ByteArrayOutputStream
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.runInterruptible
 
 /**
  * Runs single commands as root through `su -c`, mirroring the exporter's command surface
  * (`find` listings, `head -c` reads, `id` for the root probe). Output is drained concurrently
  * to avoid pipe deadlocks; every command is bounded by a timeout that kills the process.
+ *
+ * [execute] blocks on [Process.waitFor], which only reacts to thread interruption, not to a
+ * cancelled [kotlinx.coroutines.Job]. Every call site therefore goes through [runInterruptible]
+ * so cancelling the surrounding coroutine (e.g. once a frida capture result already arrived)
+ * interrupts the wait immediately instead of leaving the `su` process to block for its own
+ * timeout — otherwise a caller that cancels early still stalls for up to that long.
  */
 internal class RootShell(private val io: kotlinx.coroutines.CoroutineDispatcher = Dispatchers.IO) {
     /** Optional diagnostics sink; the repository wires it to its trace file. */
     var diagnosticSink: ((String) -> Unit)? = null
 
-    suspend fun available(): Boolean = withContext(io) {
+    suspend fun available(): Boolean = runInterruptible(io) {
         runCatching {
             execute("id", PROBE_TIMEOUT_MILLIS, ignoreExitCode = false)
                 ?.toString(Charsets.UTF_8)
@@ -28,54 +34,58 @@ internal class RootShell(private val io: kotlinx.coroutines.CoroutineDispatcher 
         timeoutMillis: Long = DEFAULT_TIMEOUT_MILLIS,
         ignoreExitCode: Boolean = false,
         onResult: ((code: Int, stderr: String, stdoutBytes: Int) -> Unit)? = null,
-    ): String? = withContext(io) {
-        binary(command, timeoutMillis, ignoreExitCode, onResult)?.toString(Charsets.UTF_8)
-    }
+    ): String? = binary(command, timeoutMillis, ignoreExitCode, onResult)?.toString(Charsets.UTF_8)
 
     suspend fun binary(
         command: String,
         timeoutMillis: Long = DEFAULT_TIMEOUT_MILLIS,
         ignoreExitCode: Boolean = false,
         onResult: ((code: Int, stderr: String, stdoutBytes: Int) -> Unit)? = null,
-    ): ByteArray? = withContext(io) {
+    ): ByteArray? = runInterruptible(io) {
         runCatching { execute(command, timeoutMillis, ignoreExitCode, onResult) }.getOrNull()
     }
 
     /**
      * Reads [byteCount] bytes of a process memory region page-by-page through dd.
      * Short reads at unmapped holes keep the bytes collected so far and stop the region.
+     * [deadlineNanoTime] bounds the whole read across its many `dd` invocations, so one huge
+     * region can't stall the caller well past its own per-command timeout.
      */
     suspend fun readMemory(
         pid: Int,
         startAddress: Long,
         byteCount: Long,
+        deadlineNanoTime: Long = Long.MAX_VALUE,
         onChunk: (ByteArray) -> Unit,
-    ): Boolean = withContext(io) {
+    ): Boolean {
         val pageSize = 4096L
         val firstPage = startAddress / pageSize
         val pages = byteCount / pageSize
         var offset = 0L
         while (offset < pages) {
+            if (System.nanoTime() >= deadlineNanoTime) return false
             val batch = minOf(pages - offset, READ_PAGES_PER_COMMAND)
-            val chunk = runCatching {
-                execute(
-                    "dd if=/proc/$pid/mem bs=4096 skip=$((firstPage + offset)) count=$batch",
-                    READ_TIMEOUT_MILLIS,
-                    ignoreExitCode = true,
-                    onResult = { code, stderr, bytes ->
-                        if (code !=
-                            0
-                        ) {
-                            diagnosticSink?.invoke("dd pid=$pid offset=$offset code=$code err=${stderr.take(120)}")
-                        }
-                    },
-                )
-            }.getOrNull() ?: return@withContext false
-            if (chunk.isEmpty()) return@withContext false
+            val chunk = runInterruptible(io) {
+                runCatching {
+                    execute(
+                        "dd if=/proc/$pid/mem bs=4096 skip=$((firstPage + offset)) count=$batch",
+                        READ_TIMEOUT_MILLIS,
+                        ignoreExitCode = true,
+                        onResult = { code, stderr, bytes ->
+                            if (code !=
+                                0
+                            ) {
+                                diagnosticSink?.invoke("dd pid=$pid offset=$offset code=$code err=${stderr.take(120)}")
+                            }
+                        },
+                    )
+                }.getOrNull()
+            } ?: return false
+            if (chunk.isEmpty()) return false
             onChunk(chunk)
             offset += batch
         }
-        true
+        return true
     }
 
     /**
@@ -94,8 +104,16 @@ internal class RootShell(private val io: kotlinx.coroutines.CoroutineDispatcher 
         val process = ProcessBuilder("su", "-M", "-c", command).start()
         val output = ByteArrayOutputStream()
         val errors = ByteArrayOutputStream()
-        val reader = thread(start = true, isDaemon = true) { process.inputStream.copyTo(output) }
-        val errorDrainer = thread(start = true, isDaemon = true) { process.errorStream.copyTo(errors) }
+        // destroyForcibly() (timeout, or an interrupted caller cutting the wait short) closes
+        // these streams from another thread; the pending read then throws instead of returning
+        // EOF. A bare Thread has no caller to catch that, so an uncaught IOException here would
+        // crash the whole process — swallow it, the drained bytes collected so far are enough.
+        val reader = thread(start = true, isDaemon = true) {
+            runCatching { process.inputStream.copyTo(output) }
+        }
+        val errorDrainer = thread(start = true, isDaemon = true) {
+            runCatching { process.errorStream.copyTo(errors) }
+        }
         try {
             if (!process.waitFor(timeoutMillis, TimeUnit.MILLISECONDS)) {
                 process.destroyForcibly()

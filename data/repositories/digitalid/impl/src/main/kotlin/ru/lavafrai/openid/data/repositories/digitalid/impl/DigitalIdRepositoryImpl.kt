@@ -48,16 +48,21 @@ class DigitalIdRepositoryImpl internal constructor(private val http: DigitalIdHt
 
     override suspend fun getSecurityStatus(launch: WebAppLaunch): SecurityStatus = mutex.withLock {
         val data = requestData(launch, "GET", STATUS_PATH)
-        val attempts = StrictJson.decimal(data["attempts_left"])
-        requireData(
-            attempts % 1.0 == 0.0 && attempts in Int.MIN_VALUE.toDouble()..Int.MAX_VALUE.toDouble(),
-            "DID_ATTEMPTS_INVALID",
-        )
+        // A captured-token profile has no PIN, so the service may omit attempts_left (or send null);
+        // only a present value must be a valid integer. Absent means "no attempt limit applies".
+        val attempts = data["attempts_left"]?.let { value ->
+            val number = StrictJson.decimal(value)
+            requireData(
+                number % 1.0 == 0.0 && number in Int.MIN_VALUE.toDouble()..Int.MAX_VALUE.toDouble(),
+                "DID_ATTEMPTS_INVALID",
+            )
+            number.toInt()
+        }
         SecurityStatus(
             tokenLevel = AccountCodec.requireNonEmptyString(data["token_level"]),
             deviceId = AccountCodec.requireNonEmptyString(data["device_id"], 1024),
             timestamp = AccountCodec.timestamp(data["timestamp"]),
-            attemptsLeft = attempts.toInt(),
+            attemptsLeft = attempts,
             cooldown = data["cooldown"]?.let(StrictJson::decimal),
         )
     }

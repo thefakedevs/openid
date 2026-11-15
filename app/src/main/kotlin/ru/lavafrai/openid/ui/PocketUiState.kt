@@ -56,6 +56,8 @@ data class PocketUiState(
     val suManagers: List<String> = emptyList(),
     val rootStage: RootImportStage? = null,
     val tokenProfile: Boolean = false,
+    val tokenLockConfigured: Boolean = false,
+    val tokenLockBiometricAvailable: Boolean = false,
     val importForm: ImportForm = ImportForm(),
     val accountMigrationRequired: Boolean = false,
     val unlockPinProtection: PinProtection = PinProtection.NOT_SAVED,
@@ -124,8 +126,6 @@ sealed interface PocketAction {
     data object RefreshRootCheck : PocketAction
 
     data object RunDfRoot : PocketAction
-
-    data object OpenQr : PocketAction
 
     data object MigrateAccountStorage : PocketAction
 

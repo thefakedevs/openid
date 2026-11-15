@@ -20,6 +20,9 @@
     <string name="method_description">Выберите, как добавить профиль Digital ID.</string>
     <string name="method_auto_label">Автоматически</string>
     <string name="method_auto_description">Приложение само вытянет авторизацию из MAX на этом телефоне. Нужен root или DFRoot.</string>
+    <string name="root_source_instruction">После нажатия «Продолжить» приложение само откроет MAX. Откройте там Цифровой ID и разблокируйте его — затем просто вернитесь в OpenID, перенос данных завершится автоматически.</string>
+    <string name="root_import_switch_toast">Откройте в MAX Цифровой ID и разблокируйте его, затем вернитесь в OpenID</string>
+    <string name="root_import_done_toast">Данные получены. Можно вернуться в OpenID</string>
     <string name="method_manual_label">Вручную</string>
     <string name="method_manual_description">Ввести ссылку импорта и пароль. Прежний способ.</string>
     <string name="root_source_title">Доступ к MAX</string>
@@ -38,11 +41,12 @@
     <string name="root_dfroot_install">Открыть страницу KernelSU</string>
     <string name="root_max_missing_notice">MAX не найден на этом телефоне. Установите MAX и войдите в аккаунт.</string>
     <string name="notice_method_required">Выберите способ добавления профиля.</string>
-    <string name="setup_token_profile">Профиль использует готовый токен Digital ID из MAX: PIN не требуется, QR открывается сразу.</string>
-    <string name="unlock_token_title">Ваш QR</string>
-    <string name="unlock_token_description">Токен Digital ID перенесён из MAX — PIN не нужен.</string>
-    <string name="unlock_token_hint">Если в MAX сменят PIN, токен обновится: повторите автоимпорт из MAX.</string>
-    <string name="unlock_token_stale">Токен больше не действует — в MAX сменили PIN или профиль. Повторите автоимпорт.</string>
+    <string name="unlock_token_title">Вход по биометрии</string>
+    <string name="unlock_token_description">Подтвердите вход биометрией, чтобы открыть перенесённый QR Digital ID.</string>
+    <string name="token_lock_create_title">Придумайте PIN</string>
+    <string name="token_lock_enter_title">Введите PIN</string>
+    <string name="token_lock_save_description">После ввода Android попросит биометрию, чтобы сохранить его.</string>
+    <string name="token_lock_invalid">Неверный PIN</string>
     <string name="settings_title">Настройки</string>
     <string name="sign_in_method">Способ входа</string>
     <string name="import_description">Введите ссылку импорта и пароль, с которым она была создана.</string>
@@ -134,6 +138,7 @@
     <string name="root_stage_locate">Ищем приложение MAX…</string>
     <string name="root_stage_prefs">Читаем данные MAX…</string>
     <string name="root_stage_session">Проверяем сессию MAX…</string>
+    <string name="root_stage_preparing">Готовим чтение Digital ID…</string>
     <string name="root_stage_material">Читаем данные Digital ID…</string>
     <string name="root_stage_memory">Сканируем память MAX…</string>
     <string name="recovery_edit_import">Исправить данные</string>
@@ -174,6 +179,8 @@
     <string name="error_import_data_description">Ссылка повреждена или содержит неподдерживаемые данные. Получите новую ссылку.</string>
     <string name="error_response_title">Неожиданный ответ сервиса</string>
     <string name="error_response_description">Полученные данные не удалось обработать. Повторите попытку; при повторении скопируйте отчёт.</string>
+    <string name="error_token_stale_title">Токен устарел</string>
+    <string name="error_token_stale_description">Токен Digital ID, перенесённый из MAX, больше не действует — обычно это значит, что он был получен не из сохранённого материала PIN, а подобран из памяти процесса, и его уже использовали или заменили. Повторите автоимпорт из MAX.</string>
     <string name="error_import_title">Не удалось импортировать профиль</string>
     <string name="error_root_import_title">Не удалось импортировать из MAX</string>
     <string name="error_root_denied_title">Нет доступа к root</string>

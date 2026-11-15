@@ -197,6 +197,17 @@ fun QrGenerationState.Failed.toPocketError(recovery: ErrorRecovery?): PocketErro
             description = UiText(R.string.error_save_pin_description, listOf(detail)),
         )
     }
+    // A captured-token profile (no PIN salt, see ImportedDigitalId.tokenProfile) authorizes with
+    // a bare token read out of MAX's own memory; a 400 here means the server no longer accepts
+    // that specific value (reused, rotated, or tied to a different launch), not a transient
+    // network hiccup. The regular PIN-derived flow never reaches AUTHORIZING with this code.
+    if (stage == QrGenerationStage.AUTHORIZING && diagnostic.code == "DIGITAL_ID_HTTP_REJECTED_400") {
+        return base.copy(
+            title = UiText(R.string.error_token_stale_title),
+            description = UiText(R.string.error_token_stale_description),
+            recovery = ErrorRecovery.REPLACE,
+        )
+    }
     return when (val failure = reason) {
         is QrGenerationFailure.Authentication -> base.copy(
             title = UiText(R.string.error_biometric_title),

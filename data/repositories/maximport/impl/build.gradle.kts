@@ -25,6 +25,7 @@ dependencies {
     implementation(projects.data.core)
     implementation(projects.max.api)
     implementation(libs.koin.android)
+    implementation(libs.xz)
     testImplementation(libs.kotlin.test.junit)
     testImplementation(libs.junit)
 }

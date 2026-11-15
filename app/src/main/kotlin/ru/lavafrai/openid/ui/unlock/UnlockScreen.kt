@@ -21,12 +21,15 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.composables.icons.materialsymbols.rounded.R as Symbols
 import ru.lavafrai.openid.R
+import ru.lavafrai.openid.models.pin.PinProtection
 import ru.lavafrai.openid.models.pin.SavedPinState
 import ru.lavafrai.openid.ui.ErrorRecovery
 import ru.lavafrai.openid.ui.PocketError
 import ru.lavafrai.openid.ui.PocketUiState
 import ru.lavafrai.openid.ui.components.ErrorCard
 import ru.lavafrai.openid.ui.components.InfoCard
+import ru.lavafrai.openid.ui.components.PinDots
+import ru.lavafrai.openid.ui.components.PinKeyboard
 import ru.lavafrai.openid.ui.components.PrimaryButton
 import ru.lavafrai.openid.ui.components.ScreenHeading
 import ru.lavafrai.openid.ui.resolve
@@ -40,52 +43,109 @@ fun UnlockScreen(
     onPinChange: (String) -> Unit,
     onSubmit: () -> Unit,
     onSavedPin: () -> Unit,
-    onOpenTokenQr: () -> Unit,
     onMigrate: () -> Unit,
 ) {
     val saved = (state.savedPin as? SavedPinState.Saved)?.takeIf { it.accountId == state.account?.accountId }
     val canSubmit = !state.busy && state.retrySeconds == 0
     var showPinHelp by remember { mutableStateOf(false) }
+    // A token-profile account (root import that only captured a bare MAX token, see
+    // ImportedDigitalId.tokenProfile) has no Digital ID PIN to protect it, so it is gated by
+    // TokenProfileLock's own on-device PIN/biometric instead of the saved real one.
+    val biometricAvailable = if (state.tokenProfile) state.tokenLockBiometricAvailable else saved != null
+    BackHandler(biometricAvailable && manualEntry && !state.busy) {
+        onPinChange("")
+        onManualEntryChange(false)
+    }
     if (state.tokenProfile && !state.accountMigrationRequired) {
-        Column(verticalArrangement = Arrangement.spacedBy(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            state.error?.let { error -> ErrorCard(error, { onRecoverError(error) }, enabled = canSubmit) }
-            if (state.error?.stage == ru.lavafrai.openid.domain.models.QrGenerationStage.AUTHORIZING) {
-                Text(
-                    stringResource(R.string.unlock_token_stale),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            if (state.error == null) {
-                ScreenHeading(
-                    stringResource(R.string.unlock_token_title),
-                    stringResource(R.string.unlock_token_description),
+        if (manualEntry || !state.tokenLockBiometricAvailable) {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                state.error?.let { error -> ErrorCard(error, { onRecoverError(error) }, enabled = canSubmit) }
+                if (state.error == null) {
+                    ScreenHeading(
+                        stringResource(
+                            if (state.tokenLockConfigured) {
+                                R.string.token_lock_enter_title
+                            } else {
+                                R.string.token_lock_create_title
+                            },
+                        ),
+                        stringResource(R.string.token_lock_save_description).takeIf {
+                            !state.tokenLockConfigured && state.unlockPinProtection == PinProtection.BIOMETRIC
+                        },
+                    )
+                }
+                PinDots(state.pin.length)
+                PinKeyboard(
+                    state.pin,
+                    onPinChange,
+                    canSubmit,
+                    onBiometric = onSavedPin.takeIf { state.tokenLockBiometricAvailable },
+                    keyMinHeight = 64.dp,
                 )
                 PrimaryButton(
-                    stringResource(R.string.qr_open),
-                    onOpenTokenQr,
-                    enabled = canSubmit,
+                    stringResource(
+                        if (state.tokenLockConfigured) R.string.qr_open else R.string.pin_save_and_open,
+                    ),
+                    onSubmit,
+                    enabled = canSubmit && state.pin.length == 4,
                     icon = Symbols.drawable.materialsymbols_ic_qr_code_2_rounded,
                 )
-                Text(
-                    stringResource(R.string.unlock_token_hint),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                if (state.retrySeconds > 0) {
+                    Text(
+                        stringResource(R.string.pin_retry_countdown, state.retrySeconds),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                state.message?.let {
+                    InfoCard(
+                        it.resolve(),
+                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                        icon = Symbols.drawable.materialsymbols_ic_info_rounded,
+                    )
+                }
             }
-            state.message?.let {
-                InfoCard(
-                    it.resolve(),
-                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-                    icon = Symbols.drawable.materialsymbols_ic_info_rounded,
-                )
+        } else {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                state.error?.let { error -> ErrorCard(error, { onRecoverError(error) }, enabled = canSubmit) }
+                if (state.error == null) {
+                    ScreenHeading(
+                        stringResource(R.string.unlock_token_title),
+                        stringResource(R.string.unlock_token_description),
+                    )
+                }
+                if (state.error?.recovery != ErrorRecovery.BIOMETRIC) {
+                    PrimaryButton(
+                        stringResource(R.string.biometric_sign_in),
+                        onSavedPin,
+                        enabled = canSubmit,
+                        icon = Symbols.drawable.materialsymbols_ic_fingerprint_rounded,
+                    )
+                }
+                TextButton(onClick = {
+                    onManualEntryChange(true)
+                }, enabled = !state.busy) { Text(stringResource(R.string.pin_enter_action)) }
+                if (state.retrySeconds > 0) {
+                    Text(
+                        stringResource(R.string.pin_retry_countdown, state.retrySeconds),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                state.message?.let {
+                    InfoCard(
+                        it.resolve(),
+                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                        icon = Symbols.drawable.materialsymbols_ic_info_rounded,
+                    )
+                }
             }
         }
         return
-    }
-    BackHandler(saved != null && manualEntry && !state.busy) {
-        onPinChange("")
-        onManualEntryChange(false)
     }
     if (manualEntry && !state.accountMigrationRequired) {
         PinEntryContent(

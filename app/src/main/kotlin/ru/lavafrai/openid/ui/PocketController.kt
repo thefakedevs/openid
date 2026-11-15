@@ -1,5 +1,11 @@
 package ru.lavafrai.openid.ui
 
+import android.content.Context
+import android.content.Intent
+import android.os.Handler
+import android.os.Looper
+import android.widget.Toast
+import androidx.annotation.StringRes
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -12,8 +18,12 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import ru.lavafrai.openid.R
+import ru.lavafrai.openid.data.core.VaultAuthentication
+import ru.lavafrai.openid.data.core.VaultProtection
+import ru.lavafrai.openid.data.repositories.maximport.api.RootImportPackages
 import ru.lavafrai.openid.data.repositories.maximport.api.RootImportStage
 import ru.lavafrai.openid.models.account.AccountState
+import ru.lavafrai.openid.models.account.ImportedAccount
 import ru.lavafrai.openid.models.auth.AuthenticationException
 import ru.lavafrai.openid.models.pin.PinProtection
 import ru.lavafrai.openid.models.pin.PinSource
@@ -28,6 +38,7 @@ class PocketController(
     private val actions: PocketActions,
     private val scope: CoroutineScope,
     private val pinPreferences: PinProtectionPreferences,
+    private val context: Context,
     nowMillis: () -> Long = { System.nanoTime() / 1_000_000 },
 ) {
     private val mutableState = MutableStateFlow(PocketUiState())
@@ -44,6 +55,7 @@ class PocketController(
         mutableState.update { it.copy(retrySeconds = seconds) }
     }
     private val imports = ImportFlow(actions.importAccount, actions.replaceAccount, scope, nowMillis, ::expireImport)
+    private val tokenLock = TokenProfileLock(context)
     private val operations = ScreenOperations(
         scope = scope,
         onStarted = {
@@ -101,8 +113,6 @@ class PocketController(
             PocketAction.RefreshRootCheck -> refreshRootCheck()
 
             PocketAction.RunDfRoot -> runDfRoot()
-
-            PocketAction.OpenQr -> openTokenQr()
 
             PocketAction.MigrateAccountStorage -> migrateAccountStorage()
 
@@ -211,6 +221,10 @@ class PocketController(
                                     },
                                     unlockPinProtection = effectivePinProtection(),
                                     tokenProfile = summary != null && pinPreferences.isTokenProfile(summary.accountId),
+                                    tokenLockConfigured = summary != null && tokenLock.isConfigured(summary.accountId),
+                                    tokenLockBiometricAvailable = summary != null &&
+                                        tokenLock.biometricEnabled(summary.accountId) &&
+                                        VaultAuthentication.unavailable(context, VaultProtection.BIOMETRIC) == null,
                                     autoUnlockPending = true,
                                 )
                             }
@@ -335,19 +349,32 @@ class PocketController(
     private fun continueRootImport() {
         val current = state.value
         if (current.destination != PocketDestination.ROOT_SOURCE || current.busy || current.rootSource == null) return
-        runOperation(ErrorOperation.ROOT_IMPORT, ErrorRecovery.ROOT_IMPORT) {
+        // Durable: the frida capture waits for the user to open Digital ID in MAX, which
+        // backgrounds this app; the operation must survive that round trip.
+        runOperation(ErrorOperation.ROOT_IMPORT, ErrorRecovery.ROOT_IMPORT, durable = true) {
             try {
+                var switchedToMax = false
                 val account = actions.extractMaxAccount { stage ->
                     mutableState.update { it.copy(rootStage = stage) }
+                    if (stage == RootImportStage.READING_DIGITAL_ID && !switchedToMax) {
+                        switchedToMax = true
+                        switchToMaxDigitalId()
+                    }
                 }
                 currentCoroutineContext().ensureActive()
                 imports.hold(account)
+                showToast(R.string.root_import_done_toast)
+                // A captured-token profile has no Digital ID PIN to protect it (GenerateQrUseCase
+                // authorizes it with the bare token, bypassing PIN checks entirely), so without a
+                // deliberate local lock, opening its QR would need no confirmation at all once the
+                // phone is unlocked. The setup screen still asks for a protection choice here; it
+                // is enforced locally by TokenProfileLock instead of the server-verified PIN flow.
                 mutableState.update {
                     it.copy(
-                        destination = PocketDestination.SETUP,
-                        setupPinProtection = PinProtection.NOT_SAVED,
                         rootStage = null,
                         tokenProfile = account.did.tokenProfile,
+                        destination = PocketDestination.SETUP,
+                        setupPinProtection = PinProtection.NOT_SAVED,
                         message = null,
                         screenError = null,
                     )
@@ -360,8 +387,25 @@ class PocketController(
         }
     }
 
+    /** Brings MAX to the foreground and asks the user, via a system toast, to open and unlock Digital ID. */
+    private fun switchToMaxDigitalId() {
+        val launch = context.packageManager.getLaunchIntentForPackage(RootImportPackages.MAX)
+        if (launch != null) {
+            runCatching { context.startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+        }
+        showToast(R.string.root_import_switch_toast)
+    }
+
+    /** Stage callbacks can arrive off the main thread; Toast requires a Looper thread. */
+    private fun showToast(@StringRes textRes: Int) {
+        Handler(Looper.getMainLooper()).post {
+            runCatching { Toast.makeText(context, textRes, Toast.LENGTH_LONG).show() }
+        }
+    }
+
+    /** Only reached after [TokenProfileLock] confirms the local PIN or biometric gate. */
     private fun openTokenQr() {
-        if (!state.value.tokenProfile || state.value.busy || state.value.account == null) return
+        if (!state.value.tokenProfile || state.value.account == null) return
         startQr(source = PinSource.Manual { CharArray(0) }, saveAfterVerification = false)
     }
 
@@ -392,33 +436,53 @@ class PocketController(
         runOperation(ErrorOperation.IMPORT, ErrorRecovery.IMPORT, durable = true) {
             // Only the explicit save ends the previous session and permits replacing storage.
             replacementSettings = null
-            qrSession.stopAndWait()
-            val summary = imports.commit(imported, current.importMode)
-            currentCoroutineContext().ensureActive()
-            pinPreferences.save(
-                summary.accountId,
-                if (current.tokenProfile) PinProtection.NOT_SAVED else current.pinProtection,
-                current.tokenProfile,
+            finishCommit(imported, current.importMode, current.pinProtection, current.tokenProfile)
+        }
+    }
+
+    /**
+     * Shared tail of both commit paths: a manual save from [SetupScreen][ru.lavafrai.openid.ui.setup.SetupScreen]
+     * and the token-profile fast path that skips it (see [continueRootImport]). Must run inside
+     * an already-started [runOperation] block.
+     */
+    private suspend fun finishCommit(
+        imported: ImportedAccount,
+        mode: ImportMode,
+        pinProtection: PinProtection,
+        tokenProfile: Boolean,
+    ) {
+        qrSession.stopAndWait()
+        val summary = imports.commit(imported, mode)
+        currentCoroutineContext().ensureActive()
+        pinPreferences.save(
+            summary.accountId,
+            if (tokenProfile) PinProtection.NOT_SAVED else pinProtection,
+            tokenProfile,
+        )
+        attempts.reset()
+        imports.clear()
+        mutableState.update {
+            it.copy(
+                destination = PocketDestination.UNLOCK,
+                account = summary,
+                accountMigrationRequired = false,
+                unlockPinProtection = pinProtection,
+                tokenLockConfigured = false,
+                tokenLockBiometricAvailable = false,
+                importForm = ImportForm(),
+                pin = "",
+                message = null,
             )
-            attempts.reset()
-            imports.clear()
-            mutableState.update {
-                it.copy(
-                    destination = PocketDestination.UNLOCK,
-                    account = summary,
-                    accountMigrationRequired = false,
-                    unlockPinProtection = current.pinProtection,
-                    importForm = ImportForm(),
-                    pin = "",
-                    message = null,
-                )
-            }
         }
     }
 
     private fun submitPin(save: Boolean = true) {
         val current = state.value
         if (!canSubmit() || current.pin.length != 4) return
+        if (current.tokenProfile) {
+            submitTokenLockPin(current)
+            return
+        }
         var buffer: CharArray? = current.pin.toCharArray()
         mutableState.update { it.copy(pin = "") }
         startQr(
@@ -437,11 +501,63 @@ class PocketController(
         )
     }
 
+    /**
+     * Checks (or, on first use, creates) the on-device lock for a token-profile account. Never
+     * touches [ru.lavafrai.openid.data.repositories.pin.api.PinRepository] or the server: this PIN
+     * only gates the local UI.
+     */
+    private fun submitTokenLockPin(current: PocketUiState) {
+        val accountId = current.account?.accountId ?: return
+        val pin = current.pin.toCharArray()
+        mutableState.update { it.copy(pin = "") }
+        try {
+            if (!tokenLock.isConfigured(accountId)) {
+                val biometric = current.unlockPinProtection == PinProtection.BIOMETRIC &&
+                    VaultAuthentication.unavailable(context, VaultProtection.BIOMETRIC) == null
+                tokenLock.set(accountId, pin, biometric)
+                attempts.reset()
+                mutableState.update {
+                    it.copy(tokenLockConfigured = true, tokenLockBiometricAvailable = biometric, message = null)
+                }
+                openTokenQr()
+            } else if (tokenLock.verify(accountId, pin)) {
+                attempts.reset()
+                openTokenQr()
+            } else {
+                attempts.rejected()
+                mutableState.update { it.copy(message = UiText(R.string.token_lock_invalid)) }
+            }
+        } finally {
+            pin.fill('\u0000')
+        }
+    }
+
     private fun useSavedPin() {
         if (!canSubmit() || state.value.replaceSavedPin) return
+        if (state.value.tokenProfile) {
+            useTokenLockBiometric()
+            return
+        }
         val saved = state.value.savedPin as? SavedPinState.Saved ?: return
         if (saved.accountId != state.value.account?.accountId) return
         startQr(PinSource.Saved(authentication.authenticator(AuthKind.BIOMETRIC)), false)
+    }
+
+    /** Biometric success alone is the gate; the cipher's output is never used for anything. */
+    private fun useTokenLockBiometric() {
+        val accountId = state.value.account?.accountId ?: return
+        if (!tokenLock.biometricEnabled(accountId)) return
+        runOperation(ErrorOperation.UNLOCK, ErrorRecovery.UNLOCK) {
+            val cipher = tokenLock.biometricCipher(accountId)
+            if (cipher == null) {
+                tokenLock.disableBiometric(accountId)
+                mutableState.update { it.copy(tokenLockBiometricAvailable = false) }
+                return@runOperation
+            }
+            authentication.authenticator(AuthKind.BIOMETRIC).authenticate(cipher)
+            currentCoroutineContext().ensureActive()
+            openTokenQr()
+        }
     }
 
     private fun autoUnlock() {
@@ -603,6 +719,8 @@ class PocketController(
                 maxInstalled = true,
                 suManagers = emptyList(),
                 tokenProfile = false,
+                tokenLockConfigured = false,
+                tokenLockBiometricAvailable = false,
                 notice = null,
                 replaceSavedPin = false,
                 importForm = ImportForm(),
@@ -629,6 +747,7 @@ class PocketController(
             actions.deleteAccount()
             currentCoroutineContext().ensureActive()
             pinPreferences.clear()
+            tokenLock.clear()
             attempts.reset()
             beginImport(ImportMode.NEW)
         }
@@ -759,6 +878,8 @@ class PocketController(
                 rootCheck = RootCheckState.IDLE,
                 rootStage = null,
                 tokenProfile = false,
+                tokenLockConfigured = false,
+                tokenLockBiometricAvailable = false,
                 importForm = ImportForm(),
                 screenError = null,
                 message = null,

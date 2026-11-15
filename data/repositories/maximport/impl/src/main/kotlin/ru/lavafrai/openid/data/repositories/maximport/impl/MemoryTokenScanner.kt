@@ -31,19 +31,34 @@ internal class MemoryTokenScanner(
         val maps = shell.text("cat /proc/$pid/maps")
         trace.line("maps chars=${maps?.length}")
         if (maps == null) return Capture.NotFound
-        val regions = regions(maps)
-        trace.line("regions preferred=${regions.size} fallbackBytes=${regions.sumOf { it.second }}")
+        val (preferred, fallback) = regions(maps)
+        trace.line(
+            "regions preferred=${preferred.size} preferredBytes=${preferred.sumOf { it.second }} " +
+                "fallback=${fallback.size} fallbackBytes=${fallback.sumOf { it.second }}",
+        )
+        // Hard wall-clock budget: a phone with a large or fragmented heap must still return in
+        // bounded time instead of stalling the whole import on an exhaustive memory sweep.
+        val deadline = System.nanoTime() + DEADLINE_MILLIS * 1_000_000L
         val found = linkedSetOf<String>()
         var scanned = 0L
+        var fallbackScanned = 0L
         var failures = 0
-        for ((index, region) in regions.withIndex()) {
+        var timedOut = false
+        for ((index, region) in (preferred + fallback).withIndex()) {
+            if (System.nanoTime() >= deadline) {
+                timedOut = true
+                break
+            }
             val (start, size) = region
+            val isFallback = index >= preferred.size
+            if (isFallback && fallbackScanned >= MAX_FALLBACK_TOTAL_BYTES) continue
             var carry = ByteArray(0)
-            val readable = shell.readMemory(pid, start, size) { chunk ->
+            val readable = shell.readMemory(pid, start, size, deadline) { chunk ->
                 val window = carry + chunk
                 TokenScan.collect(window, found)
                 carry = TokenScan.carryOver(window)
                 scanned += chunk.size
+                if (isFallback) fallbackScanned += chunk.size
             }
             if (!readable) {
                 failures++
@@ -51,7 +66,7 @@ internal class MemoryTokenScanner(
             }
             if (found.size > 1) break
         }
-        trace.line("scan done scanned=$scanned distinct=${found.size} failures=$failures")
+        trace.line("scan done scanned=$scanned distinct=${found.size} failures=$failures timedOut=$timedOut")
         return when (found.size) {
             1 -> Capture.Token(found.first())
             0 -> Capture.NotFound
@@ -59,7 +74,8 @@ internal class MemoryTokenScanner(
         }
     }
 
-    private fun regions(maps: String): List<Pair<Long, Long>> {
+    /** Dalvik heap segments first (where the bridge log ring lives), capped and budgeted separately from the rest. */
+    private fun regions(maps: String): Pair<List<Pair<Long, Long>>, List<Pair<Long, Long>>> {
         val preferred = mutableListOf<Pair<Long, Long>>()
         val fallback = mutableListOf<Pair<Long, Long>>()
         for (line in maps.lineSequence()) {
@@ -70,18 +86,19 @@ internal class MemoryTokenScanner(
             val start = range.substring(0, dash).toLongOrNull(16) ?: continue
             val end = range.substring(dash + 1).toLongOrNull(16) ?: continue
             val size = end - start
-            if (size <= 0 || size > MAX_REGION_BYTES) continue
+            if (size <= 0) continue
             val name = line.substringAfterLast(' ', "")
             val anonymous = name.isEmpty() || name.startsWith("[anon:") || name == "[heap]"
             if (!anonymous) continue
             if (name.startsWith("[anon:dalvik")) {
-                preferred += Pair(start, size)
+                if (size <= MAX_PREFERRED_REGION_BYTES) preferred += Pair(start, size)
             } else {
-                fallback += Pair(start, size)
+                // Native/graphics anonymous mappings can be huge and are a long shot for a small
+                // string; only the smaller ones are worth the time budget.
+                if (size <= MAX_FALLBACK_REGION_BYTES) fallback += Pair(start, size)
             }
         }
-        // The bridge log ring lives in the dalvik heap; scan it before anything else.
-        return preferred + fallback
+        return preferred to fallback
     }
 
     private companion object {
@@ -89,6 +106,9 @@ internal class MemoryTokenScanner(
         const val TOKEN_HEX_LENGTH = 64
         const val TOKEN_LENGTH = TOKEN_PREFIX.length + TOKEN_HEX_LENGTH
         const val CARRY_BYTES = TOKEN_LENGTH
-        const val MAX_REGION_BYTES = 8L * 1024 * 1024 * 1024
+        const val MAX_PREFERRED_REGION_BYTES = 512L * 1024 * 1024
+        const val MAX_FALLBACK_REGION_BYTES = 64L * 1024 * 1024
+        const val MAX_FALLBACK_TOTAL_BYTES = 256L * 1024 * 1024
+        const val DEADLINE_MILLIS = 45_000L
     }
 }

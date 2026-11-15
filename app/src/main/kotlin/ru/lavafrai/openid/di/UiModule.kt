@@ -19,5 +19,5 @@ val uiModule = module {
         )
     }
     single { PinProtectionPreferences(androidContext()) }
-    viewModel { PocketViewModel(get(), get()) }
+    viewModel { PocketViewModel(get(), get(), androidContext()) }
 }

@@ -29,7 +29,8 @@ class ValidateDigitalIdSecurityStatusUseCase {
         account.creationTimestamp?.let {
             check(status.timestamp.matches(it), DigitalIdPreflightFailure.TIMESTAMP_MISMATCH)
         }
-        check(status.attemptsLeft > 0, DigitalIdPreflightFailure.ATTEMPTS_EXHAUSTED)
+        val attemptsLeft = status.attemptsLeft
+        check(attemptsLeft == null || attemptsLeft > 0, DigitalIdPreflightFailure.ATTEMPTS_EXHAUSTED)
         val cooldown = status.cooldown
         check(
             cooldown == null || (cooldown.isFinite() && cooldown <= 0),

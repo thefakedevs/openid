@@ -24,6 +24,7 @@ material-symbols = "2.2.1"
 
 [libraries]
 qrose = { module = "io.github.alexzhirkevich:qrose", version.ref = "qrose" }
+xz = { module = "org.tukaani:xz", version = "1.10" }
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
 kotlin-test-junit = { module = "org.jetbrains.kotlin:kotlin-test-junit", version.ref = "kotlin" }
 junit = { module = "junit:junit", version = "4.13.2" }

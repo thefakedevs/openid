@@ -48,7 +48,6 @@ fun RootSourceScreen(
     check: RootCheckState,
     maxInstalled: Boolean,
     suManagers: List<String>,
-    dfRootLog: String?,
     busy: Boolean,
     onSelect: (RootSource) -> Unit,
     onRefreshCheck: () -> Unit,
@@ -94,8 +93,13 @@ fun RootSourceScreen(
                 icon = Symbols.drawable.materialsymbols_ic_info_rounded,
             )
 
+            selected != null && check == RootCheckState.AVAILABLE -> InfoCard(
+                stringResource(R.string.root_source_instruction),
+                icon = Symbols.drawable.materialsymbols_ic_info_rounded,
+            )
+
             selected == RootSource.DFROOT && check != RootCheckState.AVAILABLE && !busy ->
-                DfRootGuidance(suManagers.isNotEmpty(), dfRootLog, context, onRunDfRoot)
+                DfRootGuidance(suManagers.isNotEmpty(), context, onRunDfRoot)
         }
         PrimaryButton(
             stringResource(R.string.action_continue),
@@ -136,8 +140,7 @@ private fun CheckingRow() {
 @Composable
 private fun DfRootGuidance(
     managerInstalled: Boolean,
-    dfRootLog: String?,
-    context: android.content.Context,
+    context: Context,
     onRunDfRoot: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -187,13 +190,6 @@ private fun DfRootGuidance(
                     tint = MaterialTheme.colorScheme.primary,
                 )
             }
-        }
-        dfRootLog?.let {
-            Text(
-                it,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
     }
 }

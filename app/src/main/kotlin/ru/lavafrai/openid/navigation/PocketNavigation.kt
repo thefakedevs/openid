@@ -47,7 +47,6 @@ fun PocketNavigation(
             check = state.rootCheck,
             maxInstalled = state.maxInstalled,
             suManagers = state.suManagers,
-            dfRootLog = null,
             busy = state.busy,
             onSelect = { dispatch(PocketAction.SelectRootSource(it)) },
             onRefreshCheck = { dispatch(PocketAction.RefreshRootCheck) },
@@ -59,7 +58,6 @@ fun PocketNavigation(
             pinProtection = state.pinProtection,
             busy = state.busy,
             replacing = state.importMode == ImportMode.REPLACE,
-            tokenProfile = state.tokenProfile,
             onPinProtection = { dispatch(PocketAction.SelectPinProtection(it)) },
             onSave = { dispatch(PocketAction.CommitImport) },
         )
@@ -72,7 +70,6 @@ fun PocketNavigation(
             onPinChange = { dispatch(PocketAction.EditPin(it)) },
             onSubmit = { dispatch(PocketAction.SubmitPin) },
             onSavedPin = { dispatch(PocketAction.UseSavedPin) },
-            onOpenTokenQr = { dispatch(PocketAction.OpenQr) },
             onMigrate = { dispatch(PocketAction.MigrateAccountStorage) },
         )
 

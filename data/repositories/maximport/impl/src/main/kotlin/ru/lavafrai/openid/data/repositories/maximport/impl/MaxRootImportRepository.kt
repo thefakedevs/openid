@@ -6,6 +6,8 @@ import android.os.Build
 import android.webkit.WebSettings
 import java.io.File
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
@@ -66,8 +68,12 @@ internal class MaxRootImportRepository(
         }.distinct()
     }
 
-    override suspend fun extract(onStage: (RootImportStage) -> Unit): ImportedAccount {
+    override suspend fun extract(onStage: (RootImportStage) -> Unit): ImportedAccount = coroutineScope {
         trace.clear()
+        val injector = FridaInjector(context, shell, trace)
+        // Decompress the embedded frida binary in parallel with the preference/session reads so it
+        // is ready when the capture starts, instead of adding its one-time cost to the user's wait.
+        val binaryInstalled = async(Dispatchers.IO) { injector.install() }
         onStage(RootImportStage.CHECKING_ROOT)
         val rootOk = shell.available()
         trace.line("root available=$rootOk")
@@ -80,24 +86,6 @@ internal class MaxRootImportRepository(
         requireData(user >= 0, "MAX_APP_MISSING")
 
         onStage(RootImportStage.READING_PREFERENCES)
-        // Why can a root session from THIS app fail to see another app's data while adb-root
-        // succeeds? Capture the session context, mount namespace and path visibility level.
-        trace.line("diag ctx=" + (shell.text("cat /proc/self/attr/current", ignoreExitCode = true)?.trim() ?: "null"))
-        trace.line("diag mnt=" + (shell.text("readlink /proc/self/ns/mnt", ignoreExitCode = true)?.trim() ?: "null"))
-        trace.line(
-            "diag ls-data=" + (
-                shell.text(
-                    "ls /data/user/0",
-                    ignoreExitCode = true,
-                    onResult = { code, stderr, bytes -> trace.line("diag ls-data code=$code out=$bytes err=$stderr") },
-                )?.lineSequence()?.take(3)?.joinToString(",") ?: "null"
-                ),
-        )
-        shell.text(
-            "ls /data/user/0/ru.oneme.app",
-            ignoreExitCode = true,
-            onResult = { code, stderr, bytes -> trace.line("diag ls-max code=$code out=$bytes err=$stderr") },
-        )
         val records = stablePreferences(user)
         trace.line("prefs records=${records.size} keys=${records.map { it.key }.distinct()}")
         val accessToken = requireSessionText(records, KEY_ACCESS_TOKEN, minLength = 8, maxLength = 32_768)
@@ -110,9 +98,32 @@ internal class MaxRootImportRepository(
         val verified = verifySession(accessToken, deviceId, appVersion, webUserAgent)
         trace.line("session verified accountId=${verified.accountId} rotated=${verified.accessToken != accessToken}")
 
-        onStage(RootImportStage.READING_DIGITAL_ID)
+        onStage(RootImportStage.PREPARING_DIGITAL_ID)
         val material = DidMaterialBuilder()
-        materialFromPreferences(records, material)
+        // The embedded frida agent is the primary source: it snapshots the official bridge of the
+        // live Digital ID WebView exactly like the reference exporter. The agent must be attached
+        // while MAX is backgrounded and MAX only brought forward afterwards, so the switch to MAX
+        // (driven by the READING_DIGITAL_ID stage) is deferred until the agent has armed its hook.
+        binaryInstalled.await()
+        val fridaCapture = injector.capture(
+            scope = this@coroutineScope,
+            onAgentReady = { onStage(RootImportStage.READING_DIGITAL_ID) },
+        )
+        when (fridaCapture) {
+            is FridaInjector.Capture.Material -> {
+                val payload = fridaCapture.payload
+                material.addPinSalt(payload["pinSalt"] as? String)
+                material.addTimestamp(payload["creationTimestamp"])
+                material.addBiometryId((payload["biometry"] as? Map<*, *>)?.get("deviceId") as? String)
+                trace.line(
+                    "frida material salt=${material.pinSalt != null} ts=${material.creationTimestamp != null} " +
+                        "bio=${material.biometricDeviceId != null}",
+                )
+            }
+
+            is FridaInjector.Capture.Failed -> trace.line("frida failed: ${fridaCapture.code}")
+        }
+        if (!material.isComplete) materialFromPreferences(records, material)
         if (!material.isComplete) materialFromLocalStorage(user, material)
         if (!material.isComplete) materialFromRawSweep(user, records, material)
         trace.line(
@@ -152,7 +163,7 @@ internal class MaxRootImportRepository(
             }
         }
         trace.line("assembling account tokenProfile=${did.tokenProfile}")
-        return ImportedAccount(
+        ImportedAccount(
             accountId = verified.accountId,
             max = ImportedMaxAccount(
                 accessToken = MaxAccessToken(verified.accessToken),

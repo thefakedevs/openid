@@ -45,6 +45,7 @@ private fun RootImportStage.label(): String = when (this) {
     RootImportStage.LOCATING_MAX -> stringResource(R.string.root_stage_locate)
     RootImportStage.READING_PREFERENCES -> stringResource(R.string.root_stage_prefs)
     RootImportStage.VERIFYING_SESSION -> stringResource(R.string.root_stage_session)
+    RootImportStage.PREPARING_DIGITAL_ID -> stringResource(R.string.root_stage_preparing)
     RootImportStage.READING_DIGITAL_ID -> stringResource(R.string.root_stage_material)
     RootImportStage.SCANNING_MEMORY -> stringResource(R.string.root_stage_memory)
 }

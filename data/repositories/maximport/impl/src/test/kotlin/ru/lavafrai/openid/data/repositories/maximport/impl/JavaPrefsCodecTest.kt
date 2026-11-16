@@ -81,4 +81,21 @@ class JavaPrefsCodecTest {
         assertEquals("\u0000", Cesu8.decode(byteArrayOf(0xC0.toByte(), 0x80.toByte()), 0, 2))
         assertNull(Cesu8.decode(byteArrayOf(0xE0.toByte()), 0, 1))
     }
+
+    @Test
+    fun `decodes cesu8 two-byte sequences`() {
+        val encoded = java.io.ByteArrayOutputStream().let { baos ->
+            java.io.DataOutputStream(baos).writeUTF("АБВ")
+            baos.toByteArray()
+        }
+        val utfLength = ((encoded[0].toInt() and 0xFF) shl 8) or (encoded[1].toInt() and 0xFF)
+        assertEquals("АБВ", Cesu8.decode(encoded, 2, utfLength))
+    }
+
+    @Test
+    fun `truncated prefs value does not throw`() {
+        val key = "auth.token".toByteArray(Charsets.US_ASCII)
+        val raw = byteArrayOf(0, key.size.toByte()) + key
+        assertTrue(JavaPrefsCodec.scan(raw, setOf("auth.token"), emptySet()).isEmpty())
+    }
 }

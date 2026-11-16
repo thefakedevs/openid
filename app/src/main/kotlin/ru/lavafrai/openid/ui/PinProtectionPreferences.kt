@@ -87,9 +87,12 @@ class PinProtectionPreferences(context: Context) {
      * If the account write had already succeeded ([markImportCommitted] was called),
      * the pending preferences are applied; otherwise they are discarded.
      */
-    fun recoverPendingImport() {
+    fun recoverPendingImport(currentAccountId: Long? = null) {
         if (!preferences.contains("txAccountId")) return
-        if (preferences.getBoolean("txCommitted", false)) {
+        val txAccountId = preferences.getLong("txAccountId", -1)
+        if (preferences.getBoolean("txCommitted", false) ||
+            (currentAccountId != null && currentAccountId == txAccountId)
+        ) {
             finalizeImport()
         } else {
             preferences.edit {

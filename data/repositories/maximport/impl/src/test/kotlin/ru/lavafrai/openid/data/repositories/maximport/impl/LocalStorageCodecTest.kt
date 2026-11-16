@@ -57,6 +57,21 @@ class LocalStorageCodecTest {
         val raw = ByteArray(512) { (it * 31 % 251).toByte() }
         assertTrue(LocalStorageCodec.scan(raw, setOf("pin_salt::digitalId")).isEmpty())
     }
+
+    @Test
+    fun `later put overwrites earlier put`() {
+        val raw = entry("pin_salt::digitalId", "old-salt") + entry("pin_salt::digitalId", "new-salt")
+        val values = LocalStorageCodec.scan(raw, setOf("pin_salt::digitalId"))
+        assertEquals("new-salt", values["pin_salt::digitalId"])
+    }
+
+    @Test
+    fun `key after last value is treated as deleted`() {
+        val putRecord = entry("pin_salt::digitalId", "old-salt")
+        val tombstone = originPrefix + "pin_salt::digitalId".toByteArray(Charsets.US_ASCII) + byteArrayOf(0xFF.toByte())
+        val raw = putRecord + tombstone
+        assertTrue(LocalStorageCodec.scan(raw, setOf("pin_salt::digitalId")).isEmpty())
+    }
 }
 
 class RawFileScannerTest {

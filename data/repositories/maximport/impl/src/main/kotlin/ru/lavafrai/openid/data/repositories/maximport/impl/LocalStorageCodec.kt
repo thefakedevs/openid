@@ -22,10 +22,20 @@ internal object LocalStorageCodec {
         for (key in keys) {
             val pattern = originPrefix + key.toByteArray(Charsets.US_ASCII)
             var index = raw.indexOf(pattern, 0)
+            var lastValuePosition = -1
+            var lastMatchPosition = -1
+            var lastValue: String? = null
             while (index >= 0) {
                 val value = readValue(raw, index + pattern.size)
-                if (value != null) found[key] = value
+                lastMatchPosition = index
+                if (value != null) {
+                    lastValuePosition = index
+                    lastValue = value
+                }
                 index = raw.indexOf(pattern, index + 1)
+            }
+            if (lastValue != null && lastValuePosition == lastMatchPosition) {
+                found[key] = lastValue
             }
         }
         return found

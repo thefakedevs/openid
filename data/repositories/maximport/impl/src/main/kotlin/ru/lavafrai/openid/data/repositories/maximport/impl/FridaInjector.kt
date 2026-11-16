@@ -39,7 +39,12 @@ internal class FridaInjector(
             val packed = File(context.filesDir, "$BINARY_NAME.xz")
             val xzHash = context.assets.open("$BINARY_NAME.xz").use { sha256(it) }
             val cachedVer = versionFile.takeIf { it.exists() }?.readText()?.trim()
-            if (!binary.exists() || binary.length() == 0L || cachedVer != xzHash) {
+            val cachedXzHash = cachedVer?.substringBefore(':')
+            val cachedBinaryHash = cachedVer?.substringAfter(':', "")?.takeIf { it.isNotEmpty() }
+            val needsInstall = !binary.exists() || binary.length() == 0L ||
+                cachedXzHash != xzHash || cachedBinaryHash == null ||
+                FileInputStream(binary).use { sha256(it) } != cachedBinaryHash
+            if (needsInstall) {
                 context.assets.open("$BINARY_NAME.xz").use { input ->
                     FileOutputStream(packed).use { output -> input.copyTo(output) }
                 }
@@ -52,8 +57,13 @@ internal class FridaInjector(
                     tmp.delete()
                     return@withContext false
                 }
-                tmp.renameTo(binary)
-                versionFile.writeText(xzHash)
+                if (!tmp.renameTo(binary)) {
+                    tmp.delete()
+                    return@withContext false
+                }
+                if (!binary.exists() || binary.length() == 0L) return@withContext false
+                val binaryHash = FileInputStream(binary).use { sha256(it) }
+                versionFile.writeText("$xzHash:$binaryHash")
             }
             binary.setExecutable(true, false)
 

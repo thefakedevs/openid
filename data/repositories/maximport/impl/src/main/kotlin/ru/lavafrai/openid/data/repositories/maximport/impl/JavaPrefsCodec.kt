@@ -233,6 +233,15 @@ internal object Cesu8 {
                     index += 2
                 }
 
+                first in 0xC2..0xDF -> {
+                    if (index + 1 >= end) return null
+                    val second = raw[index + 1].toInt() and 0xFF
+                    if (second and 0xC0 != 0x80) return null
+                    val codePoint = ((first and 0x1F) shl 6) or (second and 0x3F)
+                    result.append(codePoint.toChar())
+                    index += 2
+                }
+
                 first and 0xE0 == 0xE0 -> {
                     if (index + 2 >= end) return null
                     val second = raw[index + 1].toInt() and 0xFF

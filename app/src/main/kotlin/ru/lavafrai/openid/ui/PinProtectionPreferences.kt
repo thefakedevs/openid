@@ -34,6 +34,26 @@ class PinProtectionPreferences(context: Context) {
         }
     }
 
+    data class Snapshot(val accountId: Long, val protection: String?, val tokenProfile: Boolean)
+
+    fun snapshot(): Snapshot? {
+        val accountId = preferences.getLong("accountId", -1)
+        if (accountId < 0) return null
+        return Snapshot(
+            accountId = accountId,
+            protection = preferences.getString("protection", null),
+            tokenProfile = preferences.getBoolean("tokenProfile", false),
+        )
+    }
+
+    fun restore(snapshot: Snapshot) {
+        preferences.edit {
+            putLong("accountId", snapshot.accountId)
+            putString("protection", snapshot.protection)
+            putBoolean("tokenProfile", snapshot.tokenProfile)
+        }
+    }
+
     fun clear() {
         preferences.edit {
             clear()

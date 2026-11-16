@@ -33,24 +33,43 @@ internal class FridaInjector(
     suspend fun install(): Boolean = withContext(Dispatchers.IO) {
         try {
             val binary = File(context.filesDir, BINARY_NAME)
-            if (!binary.exists() || binary.length() == 0L) {
-                val packed = File(context.filesDir, "$BINARY_NAME.xz")
+            val versionFile = File(context.filesDir, "$BINARY_NAME.ver")
+            val packed = File(context.filesDir, "$BINARY_NAME.xz")
+            val xzLen = context.assets.open("$BINARY_NAME.xz").use { s ->
+                var n = 0L; val buf = ByteArray(8192); var r: Int
+                while (s.read(buf).also { r = it } > 0) n += r; n
+            }
+            val cachedVer = versionFile.takeIf { it.exists() }?.readText()?.trim()?.toLongOrNull()
+            if (!binary.exists() || binary.length() == 0L || cachedVer != xzLen) {
                 context.assets.open("$BINARY_NAME.xz").use { input ->
                     FileOutputStream(packed).use { output -> input.copyTo(output) }
                 }
+                val tmp = File(context.filesDir, "$BINARY_NAME.tmp")
                 XZInputStream(FileInputStream(packed)).use { input ->
-                    FileOutputStream(binary).use { output -> input.copyTo(output) }
+                    FileOutputStream(tmp).use { output -> input.copyTo(output) }
                 }
                 packed.delete()
+                if (tmp.length() == 0L) { tmp.delete(); return@withContext false }
+                tmp.renameTo(binary)
+                versionFile.writeText(xzLen.toString())
             }
             binary.setExecutable(true, false)
+
             val agent = File(context.filesDir, AGENT_NAME)
-            if (!agent.exists()) {
-                context.assets.open(AGENT_NAME).use { input ->
-                    FileOutputStream(agent).use { output -> input.copyTo(output) }
-                }
+            val agentAssetLen = context.assets.open(AGENT_NAME).use { s ->
+                var n = 0L; val buf = ByteArray(8192); var r: Int
+                while (s.read(buf).also { r = it } > 0) n += r; n
             }
-            val ok = binary.exists() && binary.canExecute() && agent.exists()
+            if (!agent.exists() || agent.length() == 0L || agent.length() != agentAssetLen) {
+                val tmp = File(context.filesDir, "$AGENT_NAME.tmp")
+                context.assets.open(AGENT_NAME).use { input ->
+                    FileOutputStream(tmp).use { output -> input.copyTo(output) }
+                }
+                if (tmp.length() == 0L) { tmp.delete(); return@withContext false }
+                tmp.renameTo(agent)
+            }
+
+            val ok = binary.exists() && binary.canExecute() && agent.exists() && agent.length() > 0
             trace.line("frida install ok=$ok binary=${binary.length()} agent=${agent.length()}")
             ok
         } catch (failure: Exception) {
@@ -129,7 +148,6 @@ internal class FridaInjector(
         val raw = shell.text("pidof ${RootImportPackages.MAX}")?.trim() ?: return null
         val pids = raw.split(Regex("\\s+")).mapNotNull { it.toIntOrNull() }
         if (pids.isEmpty()) return null
-        if (pids.size == 1) return pids[0]
         val uidMin = user * 100_000
         val uidMax = uidMin + 99_999
         for (pid in pids) {

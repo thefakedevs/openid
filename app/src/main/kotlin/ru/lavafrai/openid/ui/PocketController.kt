@@ -451,10 +451,19 @@ class PocketController(
         tokenProfile: Boolean,
     ) {
         qrSession.stopAndWait()
+        tokenLock.clear()
         // Save profile metadata before the account so a crash after account write still
-        // has the token-profile flag on the next startup.
+        // has the token-profile flag on the next startup. Snapshot the old values first
+        // so a failed commit (not a crash) can restore them for the surviving account.
+        val previousPrefs = pinPreferences.snapshot()
         pinPreferences.save(imported.accountId, pinProtection, tokenProfile)
-        val summary = imports.commit(imported, mode)
+        val summary: ru.lavafrai.openid.models.account.AccountSummary
+        try {
+            summary = imports.commit(imported, mode)
+        } catch (e: Exception) {
+            previousPrefs?.let { pinPreferences.restore(it) } ?: pinPreferences.clear()
+            throw e
+        }
         currentCoroutineContext().ensureActive()
         attempts.reset()
         imports.clear()

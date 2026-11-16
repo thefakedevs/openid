@@ -106,7 +106,6 @@ internal class MemoryTokenScanner(
         val raw = shell.text("pidof $packageName")?.trim() ?: return null
         val pids = raw.split(Regex("\\s+")).mapNotNull { it.toIntOrNull() }
         if (pids.isEmpty()) return null
-        if (pids.size == 1) return pids[0]
         val uidMin = user * 100_000
         val uidMax = uidMin + 99_999
         for (pid in pids) {

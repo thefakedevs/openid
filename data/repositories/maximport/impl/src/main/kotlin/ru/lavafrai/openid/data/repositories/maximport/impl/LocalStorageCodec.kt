@@ -22,7 +22,7 @@ internal object LocalStorageCodec {
         for (key in keys) {
             val pattern = originPrefix + key.toByteArray(Charsets.US_ASCII)
             var index = raw.indexOf(pattern, 0)
-            while (index >= 0 && !found.containsKey(key)) {
+            while (index >= 0) {
                 val value = readValue(raw, index + pattern.size)
                 if (value != null) found[key] = value
                 index = raw.indexOf(pattern, index + 1)
@@ -50,8 +50,16 @@ internal object LocalStorageCodec {
         val payload = raw.copyOfRange(position, position + length)
         val encoding = payload[0].toInt() and 0xFF
         return when (encoding) {
-            0x00 -> if ((payload.size - 1) % 2 == 0) decode(payload.copyOfRange(1, payload.size), Charsets.UTF_16LE) else null
+            0x00 -> if ((payload.size - 1) % 2 ==
+                0
+            ) {
+                decode(payload.copyOfRange(1, payload.size), Charsets.UTF_16LE)
+            } else {
+                null
+            }
+
             0x01 -> decode(payload.copyOfRange(1, payload.size), Charsets.ISO_8859_1)
+
             else -> null
         }?.takeIf { it.isNotEmpty() }
     }

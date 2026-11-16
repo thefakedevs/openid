@@ -3,7 +3,6 @@ package ru.lavafrai.openid.data.repositories.digitalid.impl
 import java.security.MessageDigest
 import java.util.WeakHashMap
 import kotlinx.coroutines.sync.Mutex
-import ru.lavafrai.openid.data.repositories.digitalid.impl.BuildConfig
 import kotlinx.coroutines.sync.withLock
 import ru.lavafrai.openid.data.core.AccountCodec
 import ru.lavafrai.openid.data.core.DataException
@@ -11,6 +10,7 @@ import ru.lavafrai.openid.data.core.DebugTrace
 import ru.lavafrai.openid.data.core.StrictJson
 import ru.lavafrai.openid.data.core.requireData
 import ru.lavafrai.openid.data.repositories.digitalid.api.DigitalIdRepository
+import ru.lavafrai.openid.data.repositories.digitalid.impl.BuildConfig
 import ru.lavafrai.openid.models.digitalid.AuthorizationResult
 import ru.lavafrai.openid.models.digitalid.DigitalIdToken
 import ru.lavafrai.openid.models.digitalid.QrSession

@@ -26,6 +26,7 @@ internal object JavaPrefsCodec {
         val records = mutableListOf<PrefRecord>()
         for (key in stringKeys) {
             scanKey(raw, key) { tag ->
+                if (tag >= raw.size) return@scanKey null
                 if ((raw[tag].toInt() and 0xFF) == TAG_STRING) stringAt(raw, tag + 1) else null
             }?.let { value ->
                 records += PrefRecord(key, value)
@@ -33,6 +34,7 @@ internal object JavaPrefsCodec {
         }
         for (key in numericKeys) {
             scanKey(raw, key) { tag ->
+                if (tag >= raw.size) return@scanKey null
                 when (raw[tag].toInt() and 0xFF) {
                     TAG_INT -> intAt(raw, tag + 1)?.toLong()
                     TAG_LONG -> longAt(raw, tag + 1)

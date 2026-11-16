@@ -83,5 +83,4 @@ class RawFileScannerTest {
         val raw = "{\"data\":\"abc\"}".toByteArray(Charsets.UTF_8)
         assertTrue(RawFileScanner.envelopes(raw, "pin_salt::digitalId").isEmpty())
     }
-
 }

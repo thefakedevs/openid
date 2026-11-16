@@ -212,6 +212,7 @@ class PocketController(
                             )
                         }
                         if (wasStarting) {
+                            pinPreferences.recoverPendingImport()
                             mutableState.update {
                                 it.copy(
                                     destination = if (summary == null) {
@@ -451,19 +452,14 @@ class PocketController(
         tokenProfile: Boolean,
     ) {
         qrSession.stopAndWait()
+        // Write-ahead: record the intended preferences so recoverPendingImport() can
+        // finalize them if the process dies after the account write but before
+        // finalizeImport(). The current preferences stay untouched until success.
+        pinPreferences.prepareImport(imported.accountId, pinProtection, tokenProfile)
+        val summary = imports.commit(imported, mode)
+        pinPreferences.markImportCommitted()
         tokenLock.clear()
-        // Save profile metadata before the account so a crash after account write still
-        // has the token-profile flag on the next startup. Snapshot the old values first
-        // so a failed commit (not a crash) can restore them for the surviving account.
-        val previousPrefs = pinPreferences.snapshot()
-        pinPreferences.save(imported.accountId, pinProtection, tokenProfile)
-        val summary: ru.lavafrai.openid.models.account.AccountSummary
-        try {
-            summary = imports.commit(imported, mode)
-        } catch (e: Exception) {
-            previousPrefs?.let { pinPreferences.restore(it) } ?: pinPreferences.clear()
-            throw e
-        }
+        pinPreferences.finalizeImport()
         currentCoroutineContext().ensureActive()
         attempts.reset()
         imports.clear()
@@ -487,7 +483,7 @@ class PocketController(
         val current = state.value
         if (!canSubmit() || current.pin.length != 4) return
         if (current.tokenProfile) {
-            submitTokenLockPin(current)
+            submitTokenLockPin(current, save)
             return
         }
         var buffer: CharArray? = current.pin.toCharArray()
@@ -513,13 +509,17 @@ class PocketController(
      * touches [ru.lavafrai.openid.data.repositories.pin.api.PinRepository] or the server: this PIN
      * only gates the local UI.
      */
-    private fun submitTokenLockPin(current: PocketUiState) {
+    private fun submitTokenLockPin(
+        current: PocketUiState,
+        save: Boolean = true,
+    ) {
         val accountId = current.account?.accountId ?: return
         val pin = current.pin.toCharArray()
         mutableState.update { it.copy(pin = "") }
         try {
             if (!tokenLock.isConfigured(accountId)) {
-                val biometric = current.unlockPinProtection == PinProtection.BIOMETRIC &&
+                val biometric = save &&
+                    current.unlockPinProtection == PinProtection.BIOMETRIC &&
                     VaultAuthentication.unavailable(context, VaultProtection.BIOMETRIC) == null
                 tokenLock.set(accountId, pin, biometric)
                 attempts.reset()

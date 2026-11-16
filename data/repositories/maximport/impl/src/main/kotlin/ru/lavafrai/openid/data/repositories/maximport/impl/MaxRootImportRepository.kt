@@ -14,11 +14,11 @@ import kotlinx.coroutines.withContext
 import ru.lavafrai.openid.data.core.DataException
 import ru.lavafrai.openid.data.core.DebugTrace
 import ru.lavafrai.openid.data.core.requireData
-import ru.lavafrai.openid.data.repositories.maximport.impl.BuildConfig
 import ru.lavafrai.openid.data.repositories.max.api.MaxSessionRepository
 import ru.lavafrai.openid.data.repositories.maximport.api.RootImportPackages
 import ru.lavafrai.openid.data.repositories.maximport.api.RootImportRepository
 import ru.lavafrai.openid.data.repositories.maximport.api.RootImportStage
+import ru.lavafrai.openid.data.repositories.maximport.impl.BuildConfig
 import ru.lavafrai.openid.models.account.ImportOptions
 import ru.lavafrai.openid.models.account.ImportedAccount
 import ru.lavafrai.openid.models.account.ImportedDigitalId

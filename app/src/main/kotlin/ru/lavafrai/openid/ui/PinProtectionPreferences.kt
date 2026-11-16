@@ -18,8 +18,8 @@ class PinProtectionPreferences(context: Context) {
         return PinProtection.entries.firstOrNull { it.name == value }
     }
 
-    fun isTokenProfile(accountId: Long): Boolean =
-        preferences.getLong("accountId", -1) == accountId && preferences.getBoolean("tokenProfile", false)
+    fun isTokenProfile(accountId: Long): Boolean = preferences.getLong("accountId", -1) == accountId &&
+        preferences.getBoolean("tokenProfile", false)
 
     fun save(
         accountId: Long,
@@ -34,23 +34,70 @@ class PinProtectionPreferences(context: Context) {
         }
     }
 
-    data class Snapshot(val accountId: Long, val protection: String?, val tokenProfile: Boolean)
-
-    fun snapshot(): Snapshot? {
-        val accountId = preferences.getLong("accountId", -1)
-        if (accountId < 0) return null
-        return Snapshot(
-            accountId = accountId,
-            protection = preferences.getString("protection", null),
-            tokenProfile = preferences.getBoolean("tokenProfile", false),
-        )
+    /**
+     * Write-ahead phase: records the values a pending import intends to commit.
+     * The actual [save] happens only after the account repository confirms the write
+     * via [finalizeImport], so a crash or failure before that leaves the current
+     * preferences intact.
+     */
+    fun prepareImport(
+        accountId: Long,
+        protection: PinProtection,
+        tokenProfile: Boolean,
+    ) {
+        preferences.edit {
+            putLong("txAccountId", accountId)
+            putString("txProtection", protection.name)
+            putBoolean("txTokenProfile", tokenProfile)
+            putBoolean("txCommitted", false)
+        }
     }
 
-    fun restore(snapshot: Snapshot) {
+    /**
+     * Called immediately after the account repository write succeeds, before any
+     * other side effects. Marks the pending transaction so [recoverPendingImport]
+     * can finalize it if the process dies before [finalizeImport].
+     */
+    fun markImportCommitted() {
+        preferences.edit { putBoolean("txCommitted", true) }
+    }
+
+    /**
+     * Applies the pending values as the current preferences and clears the
+     * transaction keys. Must be called after [markImportCommitted].
+     */
+    fun finalizeImport() {
+        val txAccountId = preferences.getLong("txAccountId", -1)
+        if (txAccountId < 0) return
+        val protection = preferences.getString("txProtection", null)
+        val tokenProfile = preferences.getBoolean("txTokenProfile", false)
         preferences.edit {
-            putLong("accountId", snapshot.accountId)
-            putString("protection", snapshot.protection)
-            putBoolean("tokenProfile", snapshot.tokenProfile)
+            putLong("accountId", txAccountId)
+            putString("protection", protection)
+            putBoolean("tokenProfile", tokenProfile)
+            remove("txAccountId")
+            remove("txProtection")
+            remove("txTokenProfile")
+            remove("txCommitted")
+        }
+    }
+
+    /**
+     * On startup, detects and resolves a half-finished import transaction.
+     * If the account write had already succeeded ([markImportCommitted] was called),
+     * the pending preferences are applied; otherwise they are discarded.
+     */
+    fun recoverPendingImport() {
+        if (!preferences.contains("txAccountId")) return
+        if (preferences.getBoolean("txCommitted", false)) {
+            finalizeImport()
+        } else {
+            preferences.edit {
+                remove("txAccountId")
+                remove("txProtection")
+                remove("txTokenProfile")
+                remove("txCommitted")
+            }
         }
     }
 

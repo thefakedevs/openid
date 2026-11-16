@@ -4,6 +4,8 @@ import android.content.Context
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.InputStream
+import java.security.MessageDigest
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -35,12 +37,9 @@ internal class FridaInjector(
             val binary = File(context.filesDir, BINARY_NAME)
             val versionFile = File(context.filesDir, "$BINARY_NAME.ver")
             val packed = File(context.filesDir, "$BINARY_NAME.xz")
-            val xzLen = context.assets.open("$BINARY_NAME.xz").use { s ->
-                var n = 0L; val buf = ByteArray(8192); var r: Int
-                while (s.read(buf).also { r = it } > 0) n += r; n
-            }
-            val cachedVer = versionFile.takeIf { it.exists() }?.readText()?.trim()?.toLongOrNull()
-            if (!binary.exists() || binary.length() == 0L || cachedVer != xzLen) {
+            val xzHash = context.assets.open("$BINARY_NAME.xz").use { sha256(it) }
+            val cachedVer = versionFile.takeIf { it.exists() }?.readText()?.trim()
+            if (!binary.exists() || binary.length() == 0L || cachedVer != xzHash) {
                 context.assets.open("$BINARY_NAME.xz").use { input ->
                     FileOutputStream(packed).use { output -> input.copyTo(output) }
                 }
@@ -49,23 +48,31 @@ internal class FridaInjector(
                     FileOutputStream(tmp).use { output -> input.copyTo(output) }
                 }
                 packed.delete()
-                if (tmp.length() == 0L) { tmp.delete(); return@withContext false }
+                if (tmp.length() == 0L) {
+                    tmp.delete()
+                    return@withContext false
+                }
                 tmp.renameTo(binary)
-                versionFile.writeText(xzLen.toString())
+                versionFile.writeText(xzHash)
             }
             binary.setExecutable(true, false)
 
             val agent = File(context.filesDir, AGENT_NAME)
-            val agentAssetLen = context.assets.open(AGENT_NAME).use { s ->
-                var n = 0L; val buf = ByteArray(8192); var r: Int
-                while (s.read(buf).also { r = it } > 0) n += r; n
+            val agentAssetHash = context.assets.open(AGENT_NAME).use { sha256(it) }
+            val installedHash = if (agent.exists() && agent.length() > 0) {
+                FileInputStream(agent).use { sha256(it) }
+            } else {
+                ""
             }
-            if (!agent.exists() || agent.length() == 0L || agent.length() != agentAssetLen) {
+            if (installedHash != agentAssetHash) {
                 val tmp = File(context.filesDir, "$AGENT_NAME.tmp")
                 context.assets.open(AGENT_NAME).use { input ->
                     FileOutputStream(tmp).use { output -> input.copyTo(output) }
                 }
-                if (tmp.length() == 0L) { tmp.delete(); return@withContext false }
+                if (tmp.length() == 0L) {
+                    tmp.delete()
+                    return@withContext false
+                }
                 tmp.renameTo(agent)
             }
 
@@ -76,6 +83,14 @@ internal class FridaInjector(
             trace.line("frida install failed: ${failure.javaClass.simpleName}")
             false
         }
+    }
+
+    private fun sha256(input: InputStream): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        val buf = ByteArray(8192)
+        var r: Int
+        while (input.read(buf).also { r = it } > 0) digest.update(buf, 0, r)
+        return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
     sealed interface Capture {

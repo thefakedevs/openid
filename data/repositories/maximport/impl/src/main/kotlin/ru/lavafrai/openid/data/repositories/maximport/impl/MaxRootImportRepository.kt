@@ -141,10 +141,14 @@ internal class MaxRootImportRepository(
             // live Digital ID WebView exactly like the reference exporter. The agent must be attached
             // while MAX is backgrounded and MAX only brought forward afterwards, so the switch to MAX
             // (driven by the READING_DIGITAL_ID stage) is deferred until the agent has armed its hook.
+            // A successful capture returns as soon as the agent posts its result, so the wait only
+            // bites on a miss. The non-final warm-up pass is expected to miss and get retried, so it
+            // gives up quickly; only the final pass keeps the longer ceiling.
             val fridaCapture = injector.capture(
                 scope = this@coroutineScope,
                 user = user,
                 onAgentReady = { onStage(RootImportStage.READING_DIGITAL_ID) },
+                waitMillis = if (lastAttempt) DID_FINAL_WAIT_MILLIS else DID_WARMUP_WAIT_MILLIS,
             )
             when (fridaCapture) {
                 is FridaInjector.Capture.Material -> {
@@ -566,5 +570,10 @@ internal class MaxRootImportRepository(
         // finds the token, which is what a manual import restart did.
         const val DID_CAPTURE_ATTEMPTS = 2
         const val DID_RETRY_DELAY_MILLIS = 1_500L
+
+        // Per-pass ceilings for the frida wait. A capture returns early on success, so these only cap
+        // a miss: the warm-up pass bails fast because it is retried, the final pass keeps more slack.
+        const val DID_WARMUP_WAIT_MILLIS = 12_000L
+        const val DID_FINAL_WAIT_MILLIS = 30_000L
     }
 }

@@ -1,8 +1,15 @@
 package ru.lavafrai.openid.ui
 
+import android.content.Context
+import android.content.Intent
+import android.os.Handler
+import android.os.Looper
+import android.widget.Toast
+import androidx.annotation.StringRes
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -10,36 +17,48 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import ru.lavafrai.openid.R
+import ru.lavafrai.openid.data.core.VaultAuthentication
+import ru.lavafrai.openid.data.core.VaultProtection
+import ru.lavafrai.openid.data.repositories.maximport.api.RootImportPackages
+import ru.lavafrai.openid.data.repositories.maximport.api.RootImportStage
 import ru.lavafrai.openid.models.account.AccountState
+import ru.lavafrai.openid.models.account.ImportedAccount
 import ru.lavafrai.openid.models.auth.AuthenticationException
 import ru.lavafrai.openid.models.pin.PinProtection
 import ru.lavafrai.openid.models.pin.PinSource
 import ru.lavafrai.openid.models.pin.SavedPinState
+import ru.lavafrai.openid.navigation.ImportMethod
 import ru.lavafrai.openid.navigation.ImportMode
 import ru.lavafrai.openid.navigation.PocketDestination
+import ru.lavafrai.openid.navigation.RootSource
 
 /** App-level UI state, kept by a ViewModel. Secrets are not written to SavedStateHandle or route arguments. */
 class PocketController(
     private val actions: PocketActions,
     private val scope: CoroutineScope,
     private val pinPreferences: PinProtectionPreferences,
+    private val context: Context,
     nowMillis: () -> Long = { System.nanoTime() / 1_000_000 },
 ) {
     private val mutableState = MutableStateFlow(PocketUiState())
     val state: StateFlow<PocketUiState> = mutableState.asStateFlow()
     private var replacementSettings: ReplacementSettings? = null
     private var observer: Job? = null
+    private var rootCheckJob: Job? = null
     private var foreground = true
     private var disposed = false
     private val authentication = AuthenticationCoordinator { prompt ->
         mutableState.update { it.copy(authPrompt = prompt) }
     }
-    private val attempts = PinAttemptLimiter(scope, nowMillis) { seconds ->
+    private val attempts = PinAttemptLimiter(context, scope, nowMillis) { seconds ->
         mutableState.update { it.copy(retrySeconds = seconds) }
     }
     private val imports = ImportFlow(actions.importAccount, actions.replaceAccount, scope, nowMillis, ::expireImport)
+    private val tokenLock = TokenProfileLock(context)
     private val operations = ScreenOperations(
         scope = scope,
         onStarted = {
@@ -85,6 +104,18 @@ class PocketController(
                     it.copy(pin = action.value.filter { char -> char in '0'..'9' }.take(4), message = null)
                 }
             }
+
+            is PocketAction.SelectImportMethod -> selectImportMethod(action.value)
+
+            PocketAction.ContinueImportMethod -> continueImportMethod()
+
+            is PocketAction.SelectRootSource -> selectRootSource(action.value)
+
+            PocketAction.ContinueRootImport -> continueRootImport()
+
+            PocketAction.RefreshRootCheck -> refreshRootCheck()
+
+            PocketAction.RunDfRoot -> runDfRoot()
 
             PocketAction.MigrateAccountStorage -> migrateAccountStorage()
 
@@ -187,16 +218,27 @@ class PocketController(
                             mutableState.update {
                                 it.copy(
                                     destination = if (summary == null) {
-                                        PocketDestination.IMPORT
+                                        PocketDestination.METHOD
                                     } else {
                                         PocketDestination.UNLOCK
                                     },
                                     unlockPinProtection = effectivePinProtection(),
+                                    tokenProfile = summary?.tokenProfile == true,
+                                    tokenLockConfigured = summary != null && tokenLock.isConfigured(summary.accountId),
+                                    tokenLockBiometricAvailable = summary != null &&
+                                        tokenLock.biometricEnabled(summary.accountId) &&
+                                        VaultAuthentication.unavailable(context, VaultProtection.BIOMETRIC) == null,
                                     autoUnlockPending = true,
                                 )
                             }
                         } else if (summary == null &&
-                            state.value.destination !in setOf(PocketDestination.IMPORT, PocketDestination.SETUP)
+                            state.value.destination !in
+                            setOf(
+                                PocketDestination.METHOD,
+                                PocketDestination.IMPORT,
+                                PocketDestination.ROOT_SOURCE,
+                                PocketDestination.SETUP,
+                            )
                         ) {
                             beginImport(ImportMode.NEW)
                         }
@@ -223,6 +265,158 @@ class PocketController(
         }
     }
 
+    private fun selectImportMethod(method: ImportMethod) {
+        if (state.value.busy) return
+        mutableState.update { it.copy(importMethod = method, message = null, screenError = null) }
+    }
+
+    private fun continueImportMethod() {
+        val current = state.value
+        if (current.destination != PocketDestination.METHOD || current.busy) return
+        when (current.importMethod) {
+            ImportMethod.MANUAL -> mutableState.update {
+                it.copy(destination = PocketDestination.IMPORT, message = null, screenError = null)
+            }
+
+            ImportMethod.AUTO -> {
+                imports.clear()
+                mutableState.update {
+                    it.copy(
+                        destination = PocketDestination.ROOT_SOURCE,
+                        rootSource = null,
+                        rootStage = null,
+                        importForm = ImportForm(),
+                        message = null,
+                        screenError = null,
+                    )
+                }
+                checkRootEnvironment()
+            }
+
+            null -> mutableState.update { it.copy(message = UiText(R.string.notice_method_required)) }
+        }
+    }
+
+    private fun selectRootSource(source: RootSource) {
+        if (state.value.busy) return
+        mutableState.update { it.copy(rootSource = source, message = null, screenError = null) }
+    }
+
+    private fun refreshRootCheck() {
+        if (state.value.destination != PocketDestination.ROOT_SOURCE || state.value.busy) return
+        checkRootEnvironment()
+    }
+
+    private suspend fun probeRootEnvironment() {
+        mutableState.update { it.copy(rootCheck = RootCheckState.CHECKING) }
+        val environment = try {
+            actions.checkRootEnvironment()
+        } catch (failure: CancellationException) {
+            throw failure
+        } catch (_: Exception) {
+            mutableState.update { it.copy(rootCheck = RootCheckState.UNAVAILABLE) }
+            return
+        }
+        mutableState.update {
+            it.copy(
+                rootCheck = if (environment.rootAvailable) {
+                    RootCheckState.AVAILABLE
+                } else {
+                    RootCheckState.UNAVAILABLE
+                },
+                maxInstalled = environment.maxInstalled,
+                suManagers = environment.suManagers,
+            )
+        }
+    }
+
+    private fun checkRootEnvironment() {
+        if (state.value.busy || rootCheckJob?.isActive == true) return
+        rootCheckJob = scope.launch { probeRootEnvironment() }
+    }
+
+    private fun runDfRoot() {
+        val current = state.value
+        if (current.destination != PocketDestination.ROOT_SOURCE || current.busy) return
+        val manager = current.suManagers.firstOrNull() ?: return
+        runOperation(ErrorOperation.ROOT_IMPORT, ErrorRecovery.ROOT_IMPORT) {
+            actions.runDfRoot(manager) { line ->
+                mutableState.update { it.copy(rootStage = null, message = UiText(direct = line.take(160))) }
+            }
+            currentCoroutineContext().ensureActive()
+            mutableState.update { it.copy(message = null, rootStage = null) }
+            probeRootEnvironment()
+        }
+    }
+
+    private fun continueRootImport() {
+        val current = state.value
+        if (current.destination != PocketDestination.ROOT_SOURCE || current.busy || current.rootSource == null) return
+        // Survives backgrounding but not disposal: the frida capture waits for the user to open Digital ID in MAX, which
+        // backgrounds this app; the operation must survive that round trip.
+        runOperation(ErrorOperation.ROOT_IMPORT, ErrorRecovery.ROOT_IMPORT, survivesBackground = true) {
+            var switchedToMax = false
+            try {
+                val account = actions.extractMaxAccount { stage ->
+                    mutableState.update { it.copy(rootStage = stage) }
+                    if (stage == RootImportStage.READING_DIGITAL_ID && !switchedToMax) {
+                        switchedToMax = true
+                        switchToMaxDigitalId()
+                    }
+                }
+                currentCoroutineContext().ensureActive()
+                // The data is in hand: bring the app back from MAX instead of waiting for the user.
+                if (switchedToMax) runCatching { actions.returnToApp() }
+                currentCoroutineContext().ensureActive()
+                imports.hold(account)
+                showToast(R.string.root_import_done_toast)
+                // A captured-token profile has no Digital ID PIN to protect it (GenerateQrUseCase
+                // authorizes it with the bare token, bypassing PIN checks entirely), so without a
+                // deliberate local lock, opening its QR would need no confirmation at all once the
+                // phone is unlocked. The setup screen still asks for a protection choice here; it
+                // is enforced locally by TokenProfileLock instead of the server-verified PIN flow.
+                mutableState.update {
+                    it.copy(
+                        rootStage = null,
+                        tokenProfile = account.did.tokenProfile,
+                        destination = PocketDestination.SETUP,
+                        setupPinProtection = PinProtection.NOT_SAVED,
+                        message = null,
+                        screenError = null,
+                    )
+                }
+            } catch (failure: Exception) {
+                if (failure is CancellationException) throw failure
+                mutableState.update { it.copy(rootStage = null) }
+                // The user is still in MAX; show the error where they can read it.
+                if (switchedToMax) runCatching { actions.returnToApp() }
+                throw failure
+            }
+        }
+    }
+
+    /** Brings MAX to the foreground and asks the user, via a system toast, to open and unlock Digital ID. */
+    private fun switchToMaxDigitalId() {
+        val launch = context.packageManager.getLaunchIntentForPackage(RootImportPackages.MAX)
+        if (launch != null) {
+            runCatching { context.startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+        }
+        showToast(R.string.root_import_switch_toast)
+    }
+
+    /** Stage callbacks can arrive off the main thread; Toast requires a Looper thread. */
+    private fun showToast(@StringRes textRes: Int) {
+        Handler(Looper.getMainLooper()).post {
+            runCatching { Toast.makeText(context, textRes, Toast.LENGTH_LONG).show() }
+        }
+    }
+
+    /** Only reached after [TokenProfileLock] confirms the local PIN or biometric gate. */
+    private fun openTokenQr() {
+        if (!state.value.tokenProfile || state.value.account == null) return
+        startQr(source = PinSource.Manual { CharArray(0) }, saveAfterVerification = false)
+    }
+
     private fun continueImport() {
         val current = state.value
         if (current.busy) return
@@ -247,32 +441,61 @@ class PocketController(
     private fun commitImport() {
         val current = state.value
         val imported = imports.prepared ?: return
-        runOperation(ErrorOperation.IMPORT, ErrorRecovery.IMPORT, durable = true) {
-            // Only the explicit save ends the previous session and permits replacing storage.
-            replacementSettings = null
-            qrSession.stopAndWait()
-            val summary = imports.commit(imported, current.importMode)
-            currentCoroutineContext().ensureActive()
-            pinPreferences.save(summary.accountId, current.pinProtection)
-            attempts.reset()
-            imports.clear()
-            mutableState.update {
-                it.copy(
-                    destination = PocketDestination.UNLOCK,
-                    account = summary,
-                    accountMigrationRequired = false,
-                    unlockPinProtection = current.pinProtection,
-                    importForm = ImportForm(),
-                    pin = "",
-                    message = null,
-                )
+        runOperation(ErrorOperation.IMPORT, ErrorRecovery.IMPORT, survivesBackground = true) {
+            // The storage commit and its cleanup must finish even if the screen goes away.
+            withContext(NonCancellable) {
+                replacementSettings = null
+                finishCommit(imported, current.importMode, current.pinProtection)
             }
+        }
+    }
+
+    /**
+     * Shared tail of both commit paths: a manual save from [SetupScreen][ru.lavafrai.openid.ui.setup.SetupScreen]
+     * and the token-profile fast path that skips it (see [continueRootImport]). Must run inside
+     * an already-started [runOperation] block.
+     */
+    private suspend fun finishCommit(
+        imported: ImportedAccount,
+        mode: ImportMode,
+        pinProtection: PinProtection,
+    ) {
+        qrSession.stopAndWait()
+        // imports.commit writes the account atomically, and its token-profile kind travels inside
+        // that record (AccountSummary.tokenProfile). There is no separate metadata to keep in sync,
+        // so a crash on either side of this call leaves a self-consistent state: either the old
+        // account with its old protection, or the new account with its own kind. The previous
+        // token lock is reset only AFTER the commit succeeds, so a failed replacement keeps the
+        // prior account's lock enforced instead of opening its QR with any PIN.
+        val summary = imports.commit(imported, mode)
+        tokenLock.clear()
+        pinPreferences.save(imported.accountId, pinProtection)
+        currentCoroutineContext().ensureActive()
+        attempts.reset()
+        imports.clear()
+        mutableState.update {
+            it.copy(
+                destination = PocketDestination.UNLOCK,
+                account = summary,
+                accountMigrationRequired = false,
+                tokenProfile = summary.tokenProfile,
+                unlockPinProtection = pinProtection,
+                tokenLockConfigured = false,
+                tokenLockBiometricAvailable = false,
+                importForm = ImportForm(),
+                pin = "",
+                message = null,
+            )
         }
     }
 
     private fun submitPin(save: Boolean = true) {
         val current = state.value
         if (!canSubmit() || current.pin.length != 4) return
+        if (current.tokenProfile) {
+            submitTokenLockPin(current, save)
+            return
+        }
         var buffer: CharArray? = current.pin.toCharArray()
         mutableState.update { it.copy(pin = "") }
         startQr(
@@ -291,11 +514,80 @@ class PocketController(
         )
     }
 
+    /**
+     * Checks (or, on first use, creates) the on-device lock for a token-profile account. Never
+     * touches [ru.lavafrai.openid.data.repositories.pin.api.PinRepository] or the server: this PIN
+     * only gates the local UI.
+     */
+    private fun submitTokenLockPin(
+        current: PocketUiState,
+        save: Boolean = true,
+    ) {
+        val accountId = current.account?.accountId ?: return
+        val pin = current.pin.toCharArray()
+        mutableState.update { it.copy(pin = "") }
+        if (state.value.busy || operations.active) {
+            pin.fill('\u0000')
+            return
+        }
+        // PBKDF2 and the stored-lock decoding run in a controlled operation on a worker dispatcher:
+        // the UI shows busy meanwhile, and an unreadable stored lock surfaces as a screen error
+        // (the account stays locked) instead of crashing the button handler.
+        runOperation(ErrorOperation.UNLOCK, ErrorRecovery.UNLOCK) {
+            try {
+                if (!tokenLock.isConfigured(accountId)) {
+                    val biometric = save &&
+                        current.unlockPinProtection == PinProtection.BIOMETRIC &&
+                        VaultAuthentication.unavailable(context, VaultProtection.BIOMETRIC) == null
+                    tokenLock.set(accountId, pin, biometric)
+                    // The lock is stored by now (set cannot be cancelled midway), so the UI must learn
+                    // it even if the screen was backgrounded; only opening the QR depends on being active.
+                    attempts.reset()
+                    mutableState.update {
+                        it.copy(tokenLockConfigured = true, tokenLockBiometricAvailable = biometric, message = null)
+                    }
+                    if (currentCoroutineContext().isActive) openTokenQr()
+                } else if (tokenLock.verify(accountId, pin)) {
+                    attempts.reset()
+                    if (currentCoroutineContext().isActive) openTokenQr()
+                } else {
+                    // Counted even if the screen went to the background during hashing, so leaving the
+                    // app mid-check cannot be used to dodge the attempt limit.
+                    attempts.rejected()
+                    mutableState.update { it.copy(message = UiText(R.string.token_lock_invalid)) }
+                }
+            } finally {
+                pin.fill('\u0000')
+            }
+        }
+    }
+
     private fun useSavedPin() {
         if (!canSubmit() || state.value.replaceSavedPin) return
+        if (state.value.tokenProfile) {
+            useTokenLockBiometric()
+            return
+        }
         val saved = state.value.savedPin as? SavedPinState.Saved ?: return
         if (saved.accountId != state.value.account?.accountId) return
         startQr(PinSource.Saved(authentication.authenticator(AuthKind.BIOMETRIC)), false)
+    }
+
+    /** Biometric success alone is the gate; the cipher's output is never used for anything. */
+    private fun useTokenLockBiometric() {
+        val accountId = state.value.account?.accountId ?: return
+        if (!tokenLock.biometricEnabled(accountId)) return
+        runOperation(ErrorOperation.UNLOCK, ErrorRecovery.UNLOCK) {
+            val cipher = tokenLock.biometricCipher(accountId)
+            if (cipher == null) {
+                tokenLock.disableBiometric(accountId)
+                mutableState.update { it.copy(tokenLockBiometricAvailable = false) }
+                return@runOperation
+            }
+            authentication.authenticator(AuthKind.BIOMETRIC).authenticate(cipher)
+            currentCoroutineContext().ensureActive()
+            openTokenQr()
+        }
     }
 
     private fun autoUnlock() {
@@ -404,11 +696,25 @@ class PocketController(
             }
             currentCoroutineContext().ensureActive()
             pinPreferences.save(account.accountId, current.pinProtection)
+            if (current.tokenProfile && tokenLock.isConfigured(account.accountId)) {
+                val wantBiometric = current.pinProtection == PinProtection.BIOMETRIC &&
+                    VaultAuthentication.unavailable(context, VaultProtection.BIOMETRIC) == null
+                if (wantBiometric && !tokenLock.biometricEnabled(account.accountId)) {
+                    tokenLock.enableBiometric(account.accountId)
+                } else if (!wantBiometric && tokenLock.biometricEnabled(account.accountId)) {
+                    tokenLock.disableBiometric(account.accountId)
+                }
+            }
+            val biometricAvailable = current.tokenProfile &&
+                tokenLock.isConfigured(account.accountId) &&
+                tokenLock.biometricEnabled(account.accountId) &&
+                VaultAuthentication.unavailable(context, VaultProtection.BIOMETRIC) == null
             mutableState.update {
                 it.copy(
                     destination = PocketDestination.UNLOCK,
                     settings = null,
                     unlockPinProtection = current.pinProtection,
+                    tokenLockBiometricAvailable = biometricAvailable,
                     savedPin = if (current.pinProtection == PinProtection.NOT_SAVED) {
                         SavedPinState.NotSaved
                     } else {
@@ -444,11 +750,21 @@ class PocketController(
         val preserveSession = replacementSettings != null
         if (!preserveSession) qrSession.stop()
         imports.clear()
+        rootCheckJob?.cancel()
         mutableState.update {
             it.copy(
-                destination = PocketDestination.IMPORT,
+                destination = PocketDestination.METHOD,
                 settings = null,
                 importMode = mode,
+                importMethod = null,
+                rootSource = null,
+                rootCheck = RootCheckState.IDLE,
+                rootStage = null,
+                maxInstalled = true,
+                suManagers = emptyList(),
+                tokenProfile = false,
+                tokenLockConfigured = false,
+                tokenLockBiometricAvailable = false,
                 notice = null,
                 replaceSavedPin = false,
                 importForm = ImportForm(),
@@ -475,6 +791,7 @@ class PocketController(
             actions.deleteAccount()
             currentCoroutineContext().ensureActive()
             pinPreferences.clear()
+            tokenLock.clear()
             attempts.reset()
             beginImport(ImportMode.NEW)
         }
@@ -483,7 +800,15 @@ class PocketController(
     private fun back() {
         if (state.value.busy) return
         when (state.value.destination) {
-            PocketDestination.SETUP -> {
+            PocketDestination.SETUP -> if (state.value.importMethod == ImportMethod.AUTO) {
+                mutableState.update {
+                    it.copy(
+                        destination = PocketDestination.ROOT_SOURCE,
+                        message = null,
+                        screenError = null,
+                    )
+                }
+            } else {
                 val form = imports.restoreForm()
                 imports.clear()
                 mutableState.update {
@@ -496,16 +821,50 @@ class PocketController(
                 }
             }
 
-            PocketDestination.IMPORT -> if (state.value.importMode == ImportMode.REPLACE) {
+            PocketDestination.ROOT_SOURCE -> {
+                imports.clear()
+                mutableState.update {
+                    it.copy(
+                        destination = PocketDestination.METHOD,
+                        rootSource = null,
+                        rootStage = null,
+                        message = null,
+                        screenError = null,
+                    )
+                }
+            }
+
+            PocketDestination.IMPORT -> {
+                val form = imports.restoreForm()
+                imports.clear()
+                mutableState.update {
+                    it.copy(
+                        destination = PocketDestination.METHOD,
+                        importMethod = null,
+                        importForm = form,
+                        message = null,
+                        screenError = null,
+                    )
+                }
+            }
+
+            PocketDestination.METHOD -> if (state.value.importMode == ImportMode.REPLACE) {
                 val settings = replacementSettings
                 replacementSettings = null
                 imports.clear()
+                val accountId = state.value.account?.accountId
                 mutableState.update {
                     it.copy(
                         destination = if (settings != null) PocketDestination.SETTINGS else PocketDestination.UNLOCK,
                         importMode = ImportMode.NEW,
+                        importMethod = null,
                         importForm = ImportForm(),
                         unlockPinProtection = effectivePinProtection(),
+                        tokenProfile = it.account?.tokenProfile == true,
+                        tokenLockConfigured = accountId != null && tokenLock.isConfigured(accountId),
+                        tokenLockBiometricAvailable = accountId != null &&
+                            tokenLock.biometricEnabled(accountId) &&
+                            VaultAuthentication.unavailable(context, VaultProtection.BIOMETRIC) == null,
                         settings = settings?.pin,
                         replaceSavedPin = settings?.replaceSavedPin == true || it.replaceSavedPin,
                         message = null,
@@ -560,10 +919,20 @@ class PocketController(
 
     private fun expireImport() {
         imports.clear()
+        val accountId = state.value.account?.accountId
         mutableState.update {
             it.copy(
-                destination = if (it.account == null) PocketDestination.IMPORT else PocketDestination.UNLOCK,
+                destination = if (it.account == null) PocketDestination.METHOD else PocketDestination.UNLOCK,
                 importMode = ImportMode.NEW,
+                importMethod = null,
+                rootSource = null,
+                rootCheck = RootCheckState.IDLE,
+                rootStage = null,
+                tokenProfile = it.account?.tokenProfile == true,
+                tokenLockConfigured = accountId != null && tokenLock.isConfigured(accountId),
+                tokenLockBiometricAvailable = accountId != null &&
+                    tokenLock.biometricEnabled(accountId) &&
+                    VaultAuthentication.unavailable(context, VaultProtection.BIOMETRIC) == null,
                 importForm = ImportForm(),
                 screenError = null,
                 message = null,
@@ -580,19 +949,23 @@ class PocketController(
         authentication.cancel()
         qrSession.stop()
         replacementSettings = null
-        if (!editingImport) imports.clear()
+        if (!editingImport) {
+            rootCheckJob?.cancel()
+            imports.clear()
+        }
         mutableState.update {
             it.copy(
                 destination = when {
                     editingImport -> it.destination
                     it.destination == PocketDestination.START -> PocketDestination.START
-                    it.account == null -> PocketDestination.IMPORT
+                    it.account == null -> PocketDestination.METHOD
                     else -> PocketDestination.UNLOCK
                 },
                 importMode = if (editingImport) it.importMode else ImportMode.NEW,
                 settings = null,
                 notice = null,
                 importForm = if (editingImport) it.importForm else ImportForm(),
+                rootStage = null,
                 pin = "",
                 authPrompt = null,
                 autoUnlockPending = true,
@@ -607,6 +980,8 @@ class PocketController(
     fun dispose() {
         disposed = true
         onBackground()
+        operations.cancel()
+        rootCheckJob?.cancel()
         imports.clear()
         mutableState.update { it.copy(importForm = ImportForm()) }
         observer?.cancel()
@@ -616,10 +991,10 @@ class PocketController(
     private fun runOperation(
         errorOperation: ErrorOperation,
         recovery: ErrorRecovery,
-        durable: Boolean = false,
+        survivesBackground: Boolean = false,
         block: suspend () -> Unit,
     ) {
-        if (!state.value.busy) operations.run(errorOperation, recovery, durable, block)
+        if (!state.value.busy) operations.run(errorOperation, recovery, survivesBackground, block)
     }
 
     private fun migrateAccountStorage() {
@@ -663,6 +1038,8 @@ class PocketController(
             } else {
                 commitImport()
             }
+
+            ErrorRecovery.ROOT_IMPORT -> continueRootImport()
 
             ErrorRecovery.BIOMETRIC -> useSavedPin()
 

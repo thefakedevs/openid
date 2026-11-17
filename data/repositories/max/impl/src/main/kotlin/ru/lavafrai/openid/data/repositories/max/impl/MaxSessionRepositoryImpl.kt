@@ -34,7 +34,7 @@ class MaxSessionRepositoryImpl internal constructor(private val connect: suspend
         clientProfile: MaxClientProfile,
     ): MaxSession {
         requireData(
-            credentials.accountId > 0 && clientProfile.tcpVersion in 10..11 && !clientProfile.fingerprint &&
+            credentials.accountId >= 0 && clientProfile.tcpVersion in 10..11 && !clientProfile.fingerprint &&
                 !clientProfile.loginUserAgent,
             "IMPORT_LOGIN_PROFILE_UNSUPPORTED",
         )
@@ -119,7 +119,10 @@ class MaxSessionRepositoryImpl internal constructor(private val connect: suspend
                 (reply["profile"] ?: extra["profile"]) as? Map<*, *> ?: throw DataException("MAX_LOGIN_PROFILE_MISSING")
             val contact = remoteProfile["contact"] as? Map<*, *>
             val accountId = (if (contact != null) contact["id"] else remoteProfile["id"]) as? Long
-            requireData(accountId == null || accountId == account.accountId, "MAX_ACCOUNT_MISMATCH")
+            requireData(
+                accountId == null || account.accountId <= 0 || accountId == account.accountId,
+                "MAX_ACCOUNT_MISMATCH",
+            )
             val tokenAttrs = reply["tokenAttrs"] as? Map<*, *>
             val returnedToken =
                 ((tokenAttrs?.get("LOGIN") as? Map<*, *>)?.get("token") as? String)?.takeIf { it.isNotEmpty() }

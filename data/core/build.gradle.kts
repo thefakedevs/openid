@@ -33,4 +33,6 @@ dependencies {
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.biometric)
     ksp(libs.androidx.room.compiler)
+    testImplementation(libs.kotlin.test.junit)
+    testImplementation(libs.junit)
 }

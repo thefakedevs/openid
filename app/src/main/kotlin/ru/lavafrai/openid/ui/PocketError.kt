@@ -15,6 +15,7 @@ import ru.lavafrai.openid.models.errors.FailureReason
 enum class ErrorOperation(@StringRes val labelRes: Int) {
     STARTUP(R.string.operation_startup),
     IMPORT(R.string.operation_import),
+    ROOT_IMPORT(R.string.operation_root_import),
     UNLOCK(R.string.operation_unlock),
     QR(R.string.operation_qr),
     SETTINGS(R.string.operation_settings),
@@ -27,6 +28,7 @@ enum class ErrorRecovery(@StringRes val labelRes: Int) {
     STARTUP(R.string.action_retry),
     EDIT_IMPORT(R.string.recovery_edit_import),
     IMPORT(R.string.recovery_import),
+    ROOT_IMPORT(R.string.recovery_root_import),
     BIOMETRIC(R.string.recovery_biometric),
     UNLOCK(R.string.recovery_unlock),
     QR(R.string.recovery_qr),
@@ -82,6 +84,9 @@ fun FailureDiagnostic.toPocketError(
         reason == FailureReason.INVALID_IMPORT_LINK ->
             UiText(R.string.error_import_link_title) to UiText(R.string.error_import_link_description)
 
+        operation == ErrorOperation.ROOT_IMPORT && kind == FailureKind.INVALID_DATA ->
+            rootImportMessage(code)
+
         reason == FailureReason.STORAGE_KEY_MISSING ->
             UiText(R.string.error_storage_key_title) to
                 UiText(R.string.error_storage_key_description)
@@ -122,6 +127,7 @@ fun FailureDiagnostic.toPocketError(
         else ->
             when (operation) {
                 ErrorOperation.IMPORT -> UiText(R.string.error_import_title)
+                ErrorOperation.ROOT_IMPORT -> UiText(R.string.error_root_import_title)
                 ErrorOperation.SETTINGS -> UiText(R.string.error_settings_title)
                 ErrorOperation.DELETE -> UiText(R.string.error_delete_title)
                 ErrorOperation.MIGRATION -> UiText(R.string.error_migration_title)
@@ -137,6 +143,32 @@ fun FailureDiagnostic.toPocketError(
         recovery
     }
     return PocketError(title, description, this, operation, action)
+}
+
+/** Auto-import failures map to stable diagnostic codes instead of raw exception messages. */
+private fun rootImportMessage(code: String): Pair<UiText, UiText> = when (code) {
+    "ROOT_ACCESS_DENIED" ->
+        UiText(R.string.error_root_denied_title) to UiText(R.string.error_root_denied_description)
+
+    "MAX_APP_MISSING" ->
+        UiText(R.string.error_max_missing_title) to UiText(R.string.error_max_missing_description)
+
+    "DID_MATERIAL_NOT_FOUND" ->
+        UiText(R.string.error_did_material_title) to UiText(R.string.error_did_material_description)
+
+    "DID_TOKEN_NOT_RUNNING" ->
+        UiText(R.string.error_did_token_title) to UiText(R.string.error_did_token_description)
+
+    "DID_TOKEN_AMBIGUOUS" ->
+        UiText(R.string.error_did_ambiguous_title) to UiText(R.string.error_did_ambiguous_description)
+
+    "MAX_IMPORT_CHANGED", "MAX_SESSION_AMBIGUOUS" ->
+        UiText(R.string.error_root_changed_title) to UiText(R.string.error_root_changed_description)
+
+    "MAX_PREFERENCES_MISSING", "MAX_ACCOUNT_ID_MISSING" ->
+        UiText(R.string.error_root_prefs_title) to UiText(R.string.error_root_prefs_description)
+
+    else -> UiText(R.string.error_root_import_title) to UiText(R.string.error_generic_description)
 }
 
 fun QrGenerationState.Failed.toPocketError(recovery: ErrorRecovery?): PocketError {
@@ -163,6 +195,17 @@ fun QrGenerationState.Failed.toPocketError(recovery: ErrorRecovery?): PocketErro
         return base.copy(
             title = UiText(R.string.error_save_pin_title),
             description = UiText(R.string.error_save_pin_description, listOf(detail)),
+        )
+    }
+    // A captured-token profile (no PIN salt, see ImportedDigitalId.tokenProfile) authorizes with
+    // a bare token read out of MAX's own memory; a 400 here means the server no longer accepts
+    // that specific value (reused, rotated, or tied to a different launch), not a transient
+    // network hiccup. The regular PIN-derived flow never reaches AUTHORIZING with this code.
+    if (stage == QrGenerationStage.AUTHORIZING && diagnostic.code == "DIGITAL_ID_HTTP_REJECTED_400") {
+        return base.copy(
+            title = UiText(R.string.error_token_stale_title),
+            description = UiText(R.string.error_token_stale_description),
+            recovery = ErrorRecovery.REPLACE,
         )
     }
     return when (val failure = reason) {

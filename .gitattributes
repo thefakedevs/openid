@@ -12,6 +12,7 @@
 .gitattributes text eol=lf
 .editorconfig text eol=lf
 gradlew text eol=lf
+*.js text eol=lf
 *.bat text eol=crlf
 
 *.jar binary

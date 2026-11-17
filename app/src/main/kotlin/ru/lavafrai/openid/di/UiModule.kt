@@ -6,6 +6,7 @@ import org.koin.dsl.module
 import ru.lavafrai.openid.ui.PinProtectionPreferences
 import ru.lavafrai.openid.ui.PocketActions
 import ru.lavafrai.openid.ui.PocketViewModel
+import ru.lavafrai.openid.ui.dfroot.DfRootRunner
 
 val uiModule = module {
     factory {
@@ -13,8 +14,10 @@ val uiModule = module {
             accountState = get(), savedPinState = get(), importAccount = get(), replaceAccount = get(),
             generateQr = get(), savePin = get(), migrateAccountStorage = get(),
             deleteSavedPin = get(), deleteAccount = get(),
+            extractMaxAccount = get(), checkRootEnvironment = get(), returnToApp = get(),
+            runDfRoot = { suManager, report -> DfRootRunner.run(androidContext(), suManager, report) },
         )
     }
     single { PinProtectionPreferences(androidContext()) }
-    viewModel { PocketViewModel(get(), get()) }
+    viewModel { PocketViewModel(get(), get(), androidContext()) }
 }

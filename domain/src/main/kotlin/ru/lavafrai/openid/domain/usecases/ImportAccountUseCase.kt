@@ -26,6 +26,6 @@ class ImportAccountUseCase(
     suspend operator fun invoke(account: ImportedAccount): AccountSummary = operations.access {
         check(accounts.getSummary() == null) { "An account already exists; use replacement" }
         accounts.save(account)
-        AccountSummary(account.accountId)
+        AccountSummary(account.accountId, account.did.tokenProfile)
     }
 }

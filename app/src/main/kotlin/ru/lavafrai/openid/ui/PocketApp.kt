@@ -227,15 +227,6 @@ private fun PocketTopBar(
                         description = stringResource(R.string.action_back),
                     )
                 }
-            } else {
-                Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.primary) {
-                    Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
-                        PocketIcon(
-                            Symbols.drawable.materialsymbols_ic_fingerprint_rounded,
-                            tint = MaterialTheme.colorScheme.onPrimary,
-                        )
-                    }
-                }
             }
         }
         Text(
@@ -246,15 +237,21 @@ private fun PocketTopBar(
             modifier = Modifier.weight(1f),
         )
         when (state.destination) {
-            PocketDestination.IMPORT, PocketDestination.SETUP -> Surface(
+            PocketDestination.METHOD, PocketDestination.IMPORT, PocketDestination.ROOT_SOURCE,
+            PocketDestination.SETUP,
+            -> Surface(
                 shape = CircleShape,
                 color = MaterialTheme.colorScheme.surfaceContainerHigh,
             ) {
                 Text(
                     stringResource(
                         R.string.import_step,
-                        if (state.destination == PocketDestination.IMPORT) 1 else 2,
-                        2,
+                        when (state.destination) {
+                            PocketDestination.METHOD -> 1
+                            PocketDestination.IMPORT, PocketDestination.ROOT_SOURCE -> 2
+                            else -> 3
+                        },
+                        3,
                     ),
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
                     style = MaterialTheme.typography.labelMedium,

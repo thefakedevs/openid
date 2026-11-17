@@ -6,9 +6,11 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import ru.lavafrai.openid.data.core.AccountCodec
 import ru.lavafrai.openid.data.core.DataException
+import ru.lavafrai.openid.data.core.DebugTrace
 import ru.lavafrai.openid.data.core.StrictJson
 import ru.lavafrai.openid.data.core.requireData
 import ru.lavafrai.openid.data.repositories.digitalid.api.DigitalIdRepository
+import ru.lavafrai.openid.data.repositories.digitalid.impl.BuildConfig
 import ru.lavafrai.openid.models.digitalid.AuthorizationResult
 import ru.lavafrai.openid.models.digitalid.DigitalIdToken
 import ru.lavafrai.openid.models.digitalid.QrSession
@@ -28,6 +30,12 @@ class DigitalIdRepositoryImpl internal constructor(private val http: DigitalIdHt
     ): Map<String, Any?> {
         token?.let { AccountCodec.requireNonEmptyString(it.value) }
         val reply = http.call(launch, method, path, token?.value)
+        if (reply.status !in 200..299) {
+            DebugTrace.line(
+                "http $method $path status=${reply.status} body=" +
+                    String(reply.body, Charsets.UTF_8).take(200),
+            )
+        }
         requireData(reply.status in 200..299, "DIGITAL_ID_HTTP_REJECTED_${reply.status}")
         requireData(
             reply.encoding == null || reply.encoding.equals("identity", ignoreCase = true),
@@ -41,16 +49,21 @@ class DigitalIdRepositoryImpl internal constructor(private val http: DigitalIdHt
 
     override suspend fun getSecurityStatus(launch: WebAppLaunch): SecurityStatus = mutex.withLock {
         val data = requestData(launch, "GET", STATUS_PATH)
-        val attempts = StrictJson.decimal(data["attempts_left"])
-        requireData(
-            attempts % 1.0 == 0.0 && attempts in Int.MIN_VALUE.toDouble()..Int.MAX_VALUE.toDouble(),
-            "DID_ATTEMPTS_INVALID",
-        )
+        // A captured-token profile has no PIN, so the service may omit attempts_left (or send null);
+        // only a present value must be a valid integer. Absent means "no attempt limit applies".
+        val attempts = data["attempts_left"]?.let { value ->
+            val number = StrictJson.decimal(value)
+            requireData(
+                number % 1.0 == 0.0 && number in Int.MIN_VALUE.toDouble()..Int.MAX_VALUE.toDouble(),
+                "DID_ATTEMPTS_INVALID",
+            )
+            number.toInt()
+        }
         SecurityStatus(
             tokenLevel = AccountCodec.requireNonEmptyString(data["token_level"]),
             deviceId = AccountCodec.requireNonEmptyString(data["device_id"], 1024),
             timestamp = AccountCodec.timestamp(data["timestamp"]),
-            attemptsLeft = attempts.toInt(),
+            attemptsLeft = attempts,
             cooldown = data["cooldown"]?.let(StrictJson::decimal),
         )
     }
@@ -60,7 +73,12 @@ class DigitalIdRepositoryImpl internal constructor(private val http: DigitalIdHt
         token: DigitalIdToken,
     ): AuthorizationResult = mutex.withLock {
         authorizedTokens.remove(launch)?.fill(0)
-        val status = requestData(launch, "POST", AUTH_PATH, token)["authorization_status"]
+        val status = try {
+            requestData(launch, "POST", AUTH_PATH, token)["authorization_status"]
+        } catch (failure: DataException) {
+            if (BuildConfig.DEBUG) DebugTrace.line("authorize rejected: ${failure.code}")
+            throw failure
+        }
         requireData(status is Boolean, "DID_AUTHORIZATION_REPLY_INVALID")
         if (status == true) authorizedTokens[launch] = tokenDigest(token)
         AuthorizationResult(status == true)

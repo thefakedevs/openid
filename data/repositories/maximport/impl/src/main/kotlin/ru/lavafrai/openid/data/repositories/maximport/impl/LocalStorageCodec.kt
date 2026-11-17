@@ -41,6 +41,7 @@ internal object LocalStorageCodec {
         keys: Set<String>,
         origin: String = "https://digital-id.max.ru",
     ): Map<String, String> = scanVersioned(raw, keys, origin, 0)
+        .orEmpty()
         .mapNotNull { (key, entry) -> entry.value?.let { key to it } }
         .toMap()
 
@@ -48,13 +49,14 @@ internal object LocalStorageCodec {
      * Like [scan] but keeps deletions and a version so entries from several files of one LevelDB
      * can be merged: a table entry is versioned by its sequence number, a log entry by
      * [LOG_VERSION_BASE] + [logNumber] (the live log always holds writes newer than any table).
+     * Null means the file is a table that is truncated or malformed: nothing about it is trusted.
      */
     fun scanVersioned(
         raw: ByteArray,
         keys: Set<String>,
         origin: String = "https://digital-id.max.ru",
         logNumber: Long,
-    ): Map<String, Versioned> {
+    ): Map<String, Versioned>? {
         val originPrefix = byteArrayOf(0x5F) + origin.toByteArray(Charsets.US_ASCII) + byteArrayOf(0x00, 0x01)
         val found = mutableMapOf<String, Versioned>()
         // An SSTable file and a WAL/log file are distinct, self-contained formats. An SSTable
@@ -62,7 +64,7 @@ internal object LocalStorageCodec {
         // must NOT also run over it: doing so would let the byte-level search resurrect a key the
         // table marked deleted. Only a file without an SSTable footer is treated as a WAL log.
         if (isSsTable(raw)) {
-            scanSsTable(raw, originPrefix, keys, found)
+            if (!scanSsTable(raw, originPrefix, keys, found)) return null
         } else {
             scanLog(raw, originPrefix, keys, LOG_VERSION_BASE + logNumber, found)
         }
@@ -70,15 +72,20 @@ internal object LocalStorageCodec {
     }
 
     /**
-     * Merges every table and log of one LevelDB directory into the database's current state: the
-     * newest version of a key wins and a deletion in a newer file hides older values. Files that
-     * are neither tables nor logs (MANIFEST, LOG, LOCK...) are ignored.
+     * Resolves a LevelDB directory to the database's current state. The `CURRENT` -> `MANIFEST`
+     * chain names the live tables and the oldest live log; leftovers of an interrupted cleanup
+     * (stale logs, obsolete tables) are ignored. Within the live files the newest version of a key
+     * wins and a deletion hides older values. If that set cannot be established (no readable
+     * manifest, a live table missing, unreadable or corrupt) the state is untrusted and empty.
      */
     class State(private val keys: Set<String>) {
-        private val merged = mutableMapOf<String, Versioned>()
+        private val tables = mutableMapOf<Long, Map<String, Versioned>?>()
+        private val logs = mutableMapOf<Long, Map<String, Versioned>>()
+        private val manifests = mutableMapOf<String, LevelDbManifest.Live?>()
+        private var current: String? = null
         private var incomplete = false
 
-        /** A table or log could not be read in full, so the merged state may miss newer writes. */
+        /** A file could not be read in full, so the directory state may miss newer writes. */
         fun markIncomplete() {
             incomplete = true
         }
@@ -88,18 +95,33 @@ internal object LocalStorageCodec {
             raw: ByteArray,
         ) {
             val name = path.substringAfterLast('/')
-            val number = name.substringBefore('.').toLongOrNull() ?: 0L
-            val isLog = name.endsWith(".log")
-            if (!isLog && !name.endsWith(".ldb") && !name.endsWith(".sst")) return
-            for ((key, entry) in scanVersioned(raw, keys, logNumber = number)) {
-                val current = merged[key]
-                if (current == null || entry.version > current.version) merged[key] = entry
+            val number = name.substringBefore('.').toLongOrNull()
+            when {
+                name == "CURRENT" -> current = String(raw, Charsets.US_ASCII).trim()
+
+                name.startsWith("MANIFEST-") -> manifests[name] = LevelDbManifest.parse(raw)
+
+                number == null -> Unit
+
+                name.endsWith(".log") -> logs[number] = scanVersioned(raw, keys, logNumber = number).orEmpty()
+
+                name.endsWith(".ldb") || name.endsWith(".sst") ->
+                    tables[number] = scanVersioned(raw, keys, logNumber = number)
             }
         }
 
-        /** Empty when any file was skipped: freshness of the remaining values cannot be established. */
         fun values(): Map<String, String> {
             if (incomplete) return emptyMap()
+            val live = manifests[current ?: return emptyMap()] ?: return emptyMap()
+            val merged = mutableMapOf<String, Versioned>()
+            fun merge(entries: Map<String, Versioned>) {
+                for ((key, entry) in entries) {
+                    val existing = merged[key]
+                    if (existing == null || entry.version > existing.version) merged[key] = entry
+                }
+            }
+            for (number in live.tables) merge(tables[number] ?: return emptyMap())
+            for ((number, entries) in logs) if (number >= live.logNumber) merge(entries)
             val result = mutableMapOf<String, String>()
             for ((key, entry) in merged) entry.value?.let { result[key] = it }
             return result
@@ -166,37 +188,42 @@ internal object LocalStorageCodec {
         return SSTABLE_MAGIC.indices.all { raw[offset + it] == SSTABLE_MAGIC[it] }
     }
 
+    /** Returns false when the table is truncated or malformed. */
     private fun scanSsTable(
         raw: ByteArray,
         originPrefix: ByteArray,
         keys: Set<String>,
         found: MutableMap<String, Versioned>,
-    ) {
-        val remaining = keys - found.keys
-        if (remaining.isEmpty()) return
-        val targetPatterns = remaining.associateWith { originPrefix + it.toByteArray(Charsets.US_ASCII) }
+    ): Boolean {
+        val targetPatterns = keys.associateWith { originPrefix + it.toByteArray(Charsets.US_ASCII) }
         val footerStart = raw.size - 48
 
         var pos = footerStart
-        val (_, ml1) = readVarLong(raw, pos) ?: return
+        val (_, ml1) = readVarLong(raw, pos) ?: return false
         pos += ml1
-        val (_, ml2) = readVarLong(raw, pos) ?: return
+        val (_, ml2) = readVarLong(raw, pos) ?: return false
         pos += ml2
-        val (indexOffset, il1) = readVarLong(raw, pos) ?: return
+        val (indexOffset, il1) = readVarLong(raw, pos) ?: return false
         pos += il1
-        val (indexSize, _) = readVarLong(raw, pos) ?: return
-        val idxOff = indexOffset.toInt()
-        val idxSz = indexSize.toInt()
-        if (idxOff < 0 || idxSz < 4 || idxOff.toLong() + idxSz > footerStart) return
+        val (indexSize, _) = readVarLong(raw, pos) ?: return false
+        if (!blockInBounds(indexOffset, indexSize, footerStart)) return false
 
         val dataBlocks = mutableListOf<Pair<Long, Long>>()
-        parseBlock(readBlock(raw, idxOff, idxSz)) { _, value ->
-            var vp = 0
-            val (off, l1) = readVarLong(value, vp) ?: return@parseBlock
-            vp += l1
-            val (sz, _) = readVarLong(value, vp) ?: return@parseBlock
-            dataBlocks += off to sz
+        val index = readBlock(raw, indexOffset.toInt(), indexSize.toInt()) ?: return false
+        var indexValid = true
+        if (!parseBlock(index) { _, value ->
+                val handle = readVarLong(value, 0)
+                val size = handle?.let { readVarLong(value, it.second) }
+                if (handle == null || size == null) {
+                    indexValid = false
+                } else {
+                    dataBlocks += handle.first to size.first
+                }
+            }
+        ) {
+            return false
         }
+        if (!indexValid) return false
 
         // Within an SSTable, entries are ordered by user key ascending and, for equal user keys,
         // by sequence number descending (newest first). The first entry seen for a user key is
@@ -205,11 +232,9 @@ internal object LocalStorageCodec {
         // on first sighting so a later, older record for the same key cannot override it.
         val resolved = mutableSetOf<String>()
         for ((blockOff, blockSz) in dataBlocks) {
-            val off = blockOff.toInt()
-            val sz = blockSz.toInt()
-            if (off < 0 || sz < 4 || blockOff + blockSz > footerStart) continue
-            val block = readBlock(raw, off, sz) ?: continue
-            parseBlock(block) { key, value ->
+            if (!blockInBounds(blockOff, blockSz, footerStart)) return false
+            val block = readBlock(raw, blockOff.toInt(), blockSz.toInt()) ?: return false
+            val valid = parseBlock(block) { key, value ->
                 if (key.size < 8) return@parseBlock
                 val typeTag = key[key.size - 8].toInt() and 0xFF
                 var sequence = 0L
@@ -226,15 +251,24 @@ internal object LocalStorageCodec {
                     }
                 }
             }
+            if (!valid) return false
         }
+        return true
     }
+
+    /** A block plus its 1-byte compression type and 4-byte CRC must lie before the footer. */
+    private fun blockInBounds(
+        offset: Long,
+        size: Long,
+        limit: Int,
+    ): Boolean = offset >= 0 && size >= 4 && size <= MAX_BLOCK_SIZE && offset <= limit - size - 5
 
     private fun readBlock(
         raw: ByteArray,
         offset: Int,
         size: Int,
     ): ByteArray? {
-        if (size < 4 || offset + size >= raw.size) return null
+        if (size < 4 || offset < 0 || size.toLong() + offset >= raw.size) return null
         val compression = raw[offset + size].toInt() and 0xFF
         return when (compression) {
             0x00 -> raw.copyOfRange(offset, offset + size)
@@ -243,28 +277,30 @@ internal object LocalStorageCodec {
         }
     }
 
+    /** Visits every entry; returns false when the block structure is malformed. */
     private fun parseBlock(
         block: ByteArray?,
         visitor: (key: ByteArray, value: ByteArray) -> Unit,
-    ) {
-        if (block == null || block.size < 4) return
+    ): Boolean {
+        if (block == null || block.size < 4) return false
         val numRestarts = readInt32LE(block, block.size - 4)
-        if (numRestarts < 0 || numRestarts > block.size / 4) return
+        if (numRestarts < 0 || numRestarts > block.size / 4) return false
         val entriesEnd = block.size - 4 - numRestarts * 4
-        if (entriesEnd < 0) return
+        if (entriesEnd < 0) return false
 
         var pos = 0
         var currentKey = ByteArray(0)
         while (pos < entriesEnd) {
-            val (shared, sl) = readVarInt(block, pos) ?: return
+            val (shared, sl) = readVarInt(block, pos) ?: return false
             pos += sl
-            val (nonShared, nsl) = readVarInt(block, pos) ?: return
+            val (nonShared, nsl) = readVarInt(block, pos) ?: return false
             pos += nsl
-            val (valueLen, vl) = readVarInt(block, pos) ?: return
+            val (valueLen, vl) = readVarInt(block, pos) ?: return false
             pos += vl
-            if (shared < 0 || nonShared < 0 || valueLen < 0) return
-            if (shared > currentKey.size) return
-            if (pos + nonShared + valueLen > entriesEnd) return
+            if (shared < 0 || nonShared < 0 || valueLen < 0) return false
+            if (shared > currentKey.size) return false
+            // Long arithmetic: the three lengths come from untrusted input and can overflow Int.
+            if (nonShared.toLong() + valueLen.toLong() > (entriesEnd - pos).toLong()) return false
 
             val key = ByteArray(shared + nonShared)
             if (shared > 0) System.arraycopy(currentKey, 0, key, 0, shared)
@@ -275,6 +311,7 @@ internal object LocalStorageCodec {
             currentKey = key
             visitor(key, value)
         }
+        return true
     }
 
     // ---- Shared value decoding ----
@@ -366,7 +403,7 @@ internal object LocalStorageCodec {
                             pos += 4
                         }
                     }
-                    if (litLen <= 0 || pos + litLen > end || out + litLen > uncompressedLen) return null
+                    if (litLen <= 0 || litLen > end - pos || litLen > uncompressedLen - out) return null
                     System.arraycopy(input, pos, output, out, litLen)
                     pos += litLen
                     out += litLen

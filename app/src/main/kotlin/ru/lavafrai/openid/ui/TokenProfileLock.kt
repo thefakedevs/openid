@@ -7,12 +7,18 @@ import android.security.keystore.KeyProperties
 import android.util.Base64
 import androidx.core.content.edit
 import java.security.KeyStore
+import java.security.MessageDigest
 import java.security.SecureRandom
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.PBEKeySpec
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
+import ru.lavafrai.openid.data.core.DataException
 
 /**
  * A device-local PIN lock for "token profile" accounts: root imports that only captured a bare
@@ -24,7 +30,10 @@ import javax.crypto.spec.PBEKeySpec
  * sent anywhere, and compared by salted hash. Deliberately independent of [PinRepository] and its
  * server-verified-PIN invariant, so it cannot affect the real PIN flow used by normal accounts.
  */
-class TokenProfileLock(private val context: Context) {
+class TokenProfileLock(
+    private val context: Context,
+    private val workDispatcher: CoroutineDispatcher = Dispatchers.Default,
+) {
     private val preferences = context.getSharedPreferences("token-profile-lock", Context.MODE_PRIVATE)
     private val keystore: KeyStore get() = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
 
@@ -35,30 +44,55 @@ class TokenProfileLock(private val context: Context) {
         isConfigured(accountId) && preferences.getBoolean("biometric", false)
 
     /** The first PIN entered for a fresh account defines the lock; there is nothing to check it against. */
-    fun set(
+    suspend fun set(
         accountId: Long,
         pin: CharArray,
         biometric: Boolean,
     ) {
-        deleteKey()
-        val salt = ByteArray(16).also { SecureRandom().nextBytes(it) }
-        preferences.edit {
-            putLong("accountId", accountId)
-            putString("salt", salt.encode())
-            putString("hash", hash(pin, salt).encode())
-            putBoolean("biometric", biometric)
+        // PBKDF2 is deliberately slow: keep it (and the preference writes) off the caller's thread.
+        // NonCancellable: once the lock is written the caller must learn it, otherwise a cancelled
+        // first-time setup would leave a configured lock the UI does not know about.
+        withContext(workDispatcher + NonCancellable) {
+            deleteKey()
+            val salt = ByteArray(SALT_BYTES).also { SecureRandom().nextBytes(it) }
+            val hash = hash(pin, salt)
+            preferences.edit {
+                putLong("accountId", accountId)
+                putString("salt", salt.encode())
+                putString("hash", hash.encode())
+                putBoolean("biometric", biometric)
+            }
+            if (biometric) runCatching { createKey() }
         }
-        if (biometric) runCatching { createKey() }
     }
 
-    fun verify(
+    /**
+     * True when [pin] matches. A stored lock that cannot be read back (missing or malformed salt or
+     * hash) throws instead of returning false: it must neither open access nor be mistaken for a
+     * first-time setup, so the caller reports a storage error and the account stays locked.
+     * Not cancellable once started, so a wrong guess is always reported back and can be counted.
+     */
+    suspend fun verify(
         accountId: Long,
         pin: CharArray,
-    ): Boolean {
-        if (preferences.getLong("accountId", -1) != accountId) return false
-        val salt = preferences.getString("salt", null)?.decode() ?: return false
-        val expected = preferences.getString("hash", null)?.decode() ?: return false
-        return hash(pin, salt).contentEquals(expected)
+    ): Boolean = withContext(workDispatcher + NonCancellable) {
+        if (preferences.getLong("accountId", -1) != accountId) return@withContext false
+        val salt = stored("salt", SALT_BYTES)
+        val expected = stored("hash", HASH_BYTES)
+        MessageDigest.isEqual(hash(pin, salt), expected)
+    }
+
+    private fun stored(
+        name: String,
+        size: Int,
+    ): ByteArray {
+        val bytes = try {
+            preferences.getString(name, null)?.decode()
+        } catch (_: IllegalArgumentException) {
+            null
+        }
+        if (bytes == null || bytes.size != size) throw DataException("STORAGE_TOKEN_LOCK_INVALID")
+        return bytes
     }
 
     /** Null means biometric unlock is unavailable right now (never set up, or the Keystore key was invalidated). */
@@ -128,5 +162,7 @@ class TokenProfileLock(private val context: Context) {
     private companion object {
         const val ALIAS = "pocket.token-profile-lock"
         const val PBKDF2_ITERATIONS = 120_000
+        const val SALT_BYTES = 16
+        const val HASH_BYTES = 32
     }
 }

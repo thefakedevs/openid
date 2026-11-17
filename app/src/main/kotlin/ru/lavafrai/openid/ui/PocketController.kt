@@ -9,6 +9,7 @@ import androidx.annotation.StringRes
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -16,7 +17,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import ru.lavafrai.openid.R
 import ru.lavafrai.openid.data.core.VaultAuthentication
 import ru.lavafrai.openid.data.core.VaultProtection
@@ -349,9 +352,9 @@ class PocketController(
     private fun continueRootImport() {
         val current = state.value
         if (current.destination != PocketDestination.ROOT_SOURCE || current.busy || current.rootSource == null) return
-        // Durable: the frida capture waits for the user to open Digital ID in MAX, which
+        // Survives backgrounding but not disposal: the frida capture waits for the user to open Digital ID in MAX, which
         // backgrounds this app; the operation must survive that round trip.
-        runOperation(ErrorOperation.ROOT_IMPORT, ErrorRecovery.ROOT_IMPORT, durable = true) {
+        runOperation(ErrorOperation.ROOT_IMPORT, ErrorRecovery.ROOT_IMPORT, survivesBackground = true) {
             try {
                 var switchedToMax = false
                 val account = actions.extractMaxAccount { stage ->
@@ -433,9 +436,12 @@ class PocketController(
     private fun commitImport() {
         val current = state.value
         val imported = imports.prepared ?: return
-        runOperation(ErrorOperation.IMPORT, ErrorRecovery.IMPORT, durable = true) {
-            replacementSettings = null
-            finishCommit(imported, current.importMode, current.pinProtection)
+        runOperation(ErrorOperation.IMPORT, ErrorRecovery.IMPORT, survivesBackground = true) {
+            // The storage commit and its cleanup must finish even if the screen goes away.
+            withContext(NonCancellable) {
+                replacementSettings = null
+                finishCommit(imported, current.importMode, current.pinProtection)
+            }
         }
     }
 
@@ -515,26 +521,39 @@ class PocketController(
         val accountId = current.account?.accountId ?: return
         val pin = current.pin.toCharArray()
         mutableState.update { it.copy(pin = "") }
-        try {
-            if (!tokenLock.isConfigured(accountId)) {
-                val biometric = save &&
-                    current.unlockPinProtection == PinProtection.BIOMETRIC &&
-                    VaultAuthentication.unavailable(context, VaultProtection.BIOMETRIC) == null
-                tokenLock.set(accountId, pin, biometric)
-                attempts.reset()
-                mutableState.update {
-                    it.copy(tokenLockConfigured = true, tokenLockBiometricAvailable = biometric, message = null)
-                }
-                openTokenQr()
-            } else if (tokenLock.verify(accountId, pin)) {
-                attempts.reset()
-                openTokenQr()
-            } else {
-                attempts.rejected()
-                mutableState.update { it.copy(message = UiText(R.string.token_lock_invalid)) }
-            }
-        } finally {
+        if (state.value.busy || operations.active) {
             pin.fill('\u0000')
+            return
+        }
+        // PBKDF2 and the stored-lock decoding run in a controlled operation on a worker dispatcher:
+        // the UI shows busy meanwhile, and an unreadable stored lock surfaces as a screen error
+        // (the account stays locked) instead of crashing the button handler.
+        runOperation(ErrorOperation.UNLOCK, ErrorRecovery.UNLOCK) {
+            try {
+                if (!tokenLock.isConfigured(accountId)) {
+                    val biometric = save &&
+                        current.unlockPinProtection == PinProtection.BIOMETRIC &&
+                        VaultAuthentication.unavailable(context, VaultProtection.BIOMETRIC) == null
+                    tokenLock.set(accountId, pin, biometric)
+                    // The lock is stored by now (set cannot be cancelled midway), so the UI must learn
+                    // it even if the screen was backgrounded; only opening the QR depends on being active.
+                    attempts.reset()
+                    mutableState.update {
+                        it.copy(tokenLockConfigured = true, tokenLockBiometricAvailable = biometric, message = null)
+                    }
+                    if (currentCoroutineContext().isActive) openTokenQr()
+                } else if (tokenLock.verify(accountId, pin)) {
+                    attempts.reset()
+                    if (currentCoroutineContext().isActive) openTokenQr()
+                } else {
+                    // Counted even if the screen went to the background during hashing, so leaving the
+                    // app mid-check cannot be used to dodge the attempt limit.
+                    attempts.rejected()
+                    mutableState.update { it.copy(message = UiText(R.string.token_lock_invalid)) }
+                }
+            } finally {
+                pin.fill('\u0000')
+            }
         }
     }
 
@@ -956,6 +975,7 @@ class PocketController(
     fun dispose() {
         disposed = true
         onBackground()
+        operations.cancel()
         rootCheckJob?.cancel()
         imports.clear()
         mutableState.update { it.copy(importForm = ImportForm()) }
@@ -966,10 +986,10 @@ class PocketController(
     private fun runOperation(
         errorOperation: ErrorOperation,
         recovery: ErrorRecovery,
-        durable: Boolean = false,
+        survivesBackground: Boolean = false,
         block: suspend () -> Unit,
     ) {
-        if (!state.value.busy) operations.run(errorOperation, recovery, durable, block)
+        if (!state.value.busy) operations.run(errorOperation, recovery, survivesBackground, block)
     }
 
     private fun migrateAccountStorage() {

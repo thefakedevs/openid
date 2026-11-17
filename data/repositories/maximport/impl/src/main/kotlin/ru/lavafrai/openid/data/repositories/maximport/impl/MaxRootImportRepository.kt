@@ -306,17 +306,41 @@ internal class MaxRootImportRepository(
     ) {
         val webviewRoot = "/data/user/$user/${RootImportPackages.MAX}/app_webview"
         val listing = shell.text(
-            "find $webviewRoot -type f -path *leveldb* -size -${MAX_FILE_BYTES + 1}c -print0",
+            "find $webviewRoot -type d -name leveldb -print0",
             timeoutMillis = READ_TIMEOUT_MILLIS,
             ignoreExitCode = true,
         ) ?: return
-        var files = 0
+        val directories = listing.split('\u0000').filter { it.startsWith(webviewRoot) && it.endsWith("/leveldb") }
+        for (directory in directories.take(MAX_LEVELDB_DIRECTORIES)) {
+            applyLocalStorage(readLevelDb(directory), material)
+            currentCoroutineContext().ensureActive()
+            if (material.isComplete) return
+        }
+    }
+
+    /**
+     * Reads every file of one LevelDB directory (including CURRENT and MANIFEST) so the codec can
+     * resolve the database's current state. Nothing is applied until all files were merged: a value
+     * in one file may be superseded or deleted by another, and a file that could not be read leaves
+     * the state untrusted.
+     */
+    private suspend fun readLevelDb(directory: String): LocalStorageCodec.State {
         val state = LocalStorageCodec.State(LOCAL_STORAGE_KEYS)
+        val listing = shell.text(
+            "find ${shellArg(directory)} -maxdepth 1 -type f -print0",
+            timeoutMillis = READ_TIMEOUT_MILLIS,
+            ignoreExitCode = true,
+        )
+        if (listing == null) {
+            state.markIncomplete()
+            return state
+        }
+        var files = 0
         for (path in listing.split('\u0000')) {
-            if (!path.contains("leveldb")) continue
+            if (!path.startsWith("$directory/")) continue
             if (files >= MAX_FILES) {
                 state.markIncomplete()
-                continue
+                break
             }
             val raw = shell.binary("head -c ${MAX_FILE_BYTES + 1} ${shellArg(path)}", ignoreExitCode = true)
             if (raw == null || raw.size > MAX_FILE_BYTES) {
@@ -327,8 +351,13 @@ internal class MaxRootImportRepository(
             state.add(path, raw)
             currentCoroutineContext().ensureActive()
         }
-        // Only the merged state of the whole database is trustworthy: a value read from one file may
-        // be superseded or deleted by another, so nothing is applied until every file was merged.
+        return state
+    }
+
+    private fun applyLocalStorage(
+        state: LocalStorageCodec.State,
+        material: DidMaterialBuilder,
+    ) {
         val values = state.values()
         material.addPinSaltEnvelope(values[KEY_PIN_SALT], nowMillis())
         material.addTimestampEnvelope(values[KEY_CREATION_TIMESTAMP], nowMillis())
@@ -347,23 +376,23 @@ internal class MaxRootImportRepository(
             ignoreExitCode = true,
         ) ?: return
         var files = 0
-        val localStorage = LocalStorageCodec.State(LOCAL_STORAGE_KEYS)
+        val levelDbDirectories = linkedSetOf<String>()
         for (path in listing.split('\n')) {
-            if (files >= MAX_FILES) break
             if (!path.startsWith("/data/user/$user/${RootImportPackages.MAX}")) continue
-            val raw = shell.binary("head -c ${MAX_FILE_BYTES + 1} ${shellArg(path)}", ignoreExitCode = true)
-            if (raw == null || raw.size > MAX_FILE_BYTES) {
-                if (path.contains("leveldb")) localStorage.markIncomplete()
+            if (path.contains("leveldb")) {
+                // Resolved per database after the loop: one file alone cannot tell whether a key
+                // was superseded, and CURRENT/MANIFEST never contain the searched keys.
+                levelDbDirectories += path.substringBeforeLast('/')
                 continue
             }
+            if (files >= MAX_FILES) break
+            val raw = shell.binary("head -c ${MAX_FILE_BYTES + 1} ${shellArg(path)}", ignoreExitCode = true) ?: continue
+            if (raw.size > MAX_FILE_BYTES) continue
             files++
             when {
                 path.endsWith(".prefs") -> materialFromPreferences(parsePrefs(raw), material)
 
                 path.endsWith(".xml") -> materialFromPreferences(XmlPrefsCodec.parse(raw), material)
-
-                // Merged after the loop: one file alone cannot tell whether a key was superseded.
-                path.contains("leveldb") -> localStorage.add(path, raw)
 
                 else -> {
                     material.addPinSaltEnvelope(RawFileScanner.envelopes(raw, KEY_PIN_SALT).firstOrNull(), nowMillis())
@@ -376,9 +405,9 @@ internal class MaxRootImportRepository(
             currentCoroutineContext().ensureActive()
             if (material.isComplete) return
         }
-        localStorage.values().let { values ->
-            material.addPinSaltEnvelope(values[KEY_PIN_SALT], nowMillis())
-            material.addTimestampEnvelope(values[KEY_CREATION_TIMESTAMP], nowMillis())
+        for (directory in levelDbDirectories.take(MAX_LEVELDB_DIRECTORIES)) {
+            applyLocalStorage(readLevelDb(directory), material)
+            currentCoroutineContext().ensureActive()
         }
         if (!material.isComplete) materialFromPreferences(records, material)
     }
@@ -463,6 +492,7 @@ internal class MaxRootImportRepository(
         const val KEY_BOT_ID = "digitalid-botid"
         const val KEY_PIN_SALT = "pin_salt::digitalId"
         const val KEY_CREATION_TIMESTAMP = "creation_timestamp::digitalId"
+        private const val MAX_LEVELDB_DIRECTORIES = 4
         private val LOCAL_STORAGE_KEYS = setOf(KEY_PIN_SALT, KEY_CREATION_TIMESTAMP)
         const val BIOMETRY_FRAGMENT = "biomet"
         const val KSUD_LIBRARY = "libksud.so"

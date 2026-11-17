@@ -143,7 +143,32 @@ class LocalStorageCodecTest {
 
     private val saltKey = "pin_salt::digitalId"
 
-    private fun stateOf(vararg files: Pair<String, ByteArray>): Map<String, String> {
+    private fun lengthPrefixed(bytes: ByteArray) = varint(bytes.size) + bytes
+
+    /** MANIFEST in LevelDB log format: one FULL record holding a VersionEdit with a log number and live tables. */
+    private fun manifest(
+        logNumber: Long,
+        vararg tables: Long,
+    ): ByteArray {
+        var edit = varint(2) + varint64(logNumber)
+        for (table in tables) {
+            edit += varint(7) + varint(0) + varint64(table) + varint64(100) +
+                lengthPrefixed(byteArrayOf(1)) + lengthPrefixed(byteArrayOf(2))
+        }
+        val header = ByteArray(4) + byteArrayOf((edit.size and 0xFF).toByte(), (edit.size ushr 8).toByte(), 1)
+        return header + edit
+    }
+
+    private fun directory(
+        logNumber: Long,
+        vararg files: Pair<String, ByteArray>,
+        liveTables: List<Long>,
+    ): List<Pair<String, ByteArray>> = listOf(
+        "/db/CURRENT" to "MANIFEST-000001\n".toByteArray(),
+        "/db/MANIFEST-000001" to manifest(logNumber, *liveTables.toLongArray()),
+    ) + files
+
+    private fun stateOf(files: List<Pair<String, ByteArray>>): Map<String, String> {
         val state = LocalStorageCodec.State(setOf(saltKey))
         files.forEach { (path, raw) -> state.add(path, raw) }
         return state.values()
@@ -153,8 +178,8 @@ class LocalStorageCodecTest {
     fun `log write newer than a table wins in either file order`() {
         val table = "/db/000005.ldb" to buildSsTable(saltKey to "old-salt")
         val log = "/db/000008.log" to entry(saltKey, "new-salt")
-        assertEquals("new-salt", stateOf(table, log)[saltKey])
-        assertEquals("new-salt", stateOf(log, table)[saltKey])
+        assertEquals("new-salt", stateOf(directory(8, table, log, liveTables = listOf(5)))[saltKey])
+        assertEquals("new-salt", stateOf(directory(8, log, table, liveTables = listOf(5)))[saltKey])
     }
 
     @Test
@@ -162,42 +187,123 @@ class LocalStorageCodecTest {
         val table = "/db/000005.ldb" to buildSsTable(saltKey to "old-salt")
         val tombstone = "/db/000008.log" to
             (originPrefix + saltKey.toByteArray(Charsets.US_ASCII) + byteArrayOf(0xFF.toByte()))
-        assertTrue(stateOf(table, tombstone).isEmpty())
-        assertTrue(stateOf(tombstone, table).isEmpty())
+        assertTrue(stateOf(directory(8, table, tombstone, liveTables = listOf(5))).isEmpty())
+        assertTrue(stateOf(directory(8, tombstone, table, liveTables = listOf(5))).isEmpty())
+    }
+
+    @Test
+    fun `stale log below the manifest log number is ignored`() {
+        val table = "/db/000005.ldb" to buildSsTable(saltKey to "new-salt")
+        val stale = "/db/000003.log" to entry(saltKey, "old-salt")
+        val live = "/db/000009.log" to ByteArray(0)
+        assertEquals("new-salt", stateOf(directory(9, stale, table, live, liveTables = listOf(5)))[saltKey])
+    }
+
+    @Test
+    fun `obsolete table missing from the manifest is ignored`() {
+        val obsolete = "/db/000004.ldb" to buildSsTable(saltKey to "old-salt")
+        val table = "/db/000006.ldb" to buildSsTable(saltKey to "salt")
+        assertEquals("salt", stateOf(directory(8, obsolete, table, liveTables = listOf(6)))[saltKey])
+    }
+
+    @Test
+    fun `state is untrusted without a readable manifest or a live table`() {
+        val table = "/db/000005.ldb" to buildSsTable(saltKey to "salt")
+        assertTrue(stateOf(listOf(table)).isEmpty())
+        assertTrue(stateOf(directory(8, table, liveTables = listOf(5, 7))).isEmpty())
+        val broken = listOf(
+            "/db/CURRENT" to "MANIFEST-000001".toByteArray(),
+            "/db/MANIFEST-000001" to byteArrayOf(1, 2, 3),
+        )
+        assertTrue(stateOf(broken + table).isEmpty())
     }
 
     @Test
     fun `skipped file makes the merged state untrusted`() {
         val state = LocalStorageCodec.State(setOf(saltKey))
-        state.add("/db/000005.ldb", buildSsTable(saltKey to "old-salt"))
+        directory(8, "/db/000005.ldb" to buildSsTable(saltKey to "old-salt"), liveTables = listOf(5))
+            .forEach { (path, raw) -> state.add(path, raw) }
+        assertEquals("old-salt", state.values()[saltKey])
         state.markIncomplete()
         assertTrue(state.values().isEmpty())
     }
 
     @Test
-    fun `non table and non log files are ignored`() {
-        val manifest = "/db/MANIFEST-000002" to (originPrefix + saltKey.toByteArray(Charsets.US_ASCII))
-        val table = "/db/000005.ldb" to buildSsTable(saltKey to "salt")
-        assertEquals("salt", stateOf(manifest, table)[saltKey])
+    fun `corrupt live table makes the state untrusted`() {
+        val good = buildSsTable(saltKey to "salt")
+        val corrupt = good.copyOf().also { it[0] = 0x7F }
+        assertTrue(stateOf(directory(8, "/db/000005.ldb" to corrupt, liveTables = listOf(5))).isEmpty())
     }
 
     @Test
-    fun `merges a real leveldb whose newer state lives in the log`() {
+    fun `sstable with overflowing entry lengths is rejected`() {
+        // shared = 0, nonShared = 1, valueLen = Int.MAX_VALUE: nonShared + valueLen wraps negative in Int.
+        val entry = byteArrayOf(0, 1, 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0x07, 0x41)
+        val block = entry + int32LE(0) + int32LE(1)
+        val indexValue = varint64(0) + varint64(block.size.toLong())
+        val index = buildDataBlock(listOf(byteArrayOf(1) to indexValue))
+        val indexOffset = block.size + 5
+        val raw = block + byteArrayOf(0, 0, 0, 0, 0) + index + byteArrayOf(0, 0, 0, 0, 0) +
+            buildFooter(0, 0, indexOffset.toLong(), index.size.toLong())
+        assertTrue(LocalStorageCodec.scan(raw, setOf(saltKey)).isEmpty())
+        assertEquals(null, LocalStorageCodec.scanVersioned(raw, setOf(saltKey), logNumber = 0))
+    }
+
+    private fun logRecord(
+        type: Int,
+        payload: ByteArray,
+    ) = ByteArray(4) + byteArrayOf((payload.size and 0xFF).toByte(), (payload.size ushr 8).toByte(), type.toByte()) +
+        payload
+
+    private fun newFileEdit(number: Long) = varint(7) + varint(0) + varint64(number) + varint64(100) +
+        lengthPrefixed(byteArrayOf(1)) + lengthPrefixed(byteArrayOf(2))
+
+    @Test
+    fun `manifest reassembles fragmented records and applies deletions`() {
+        val edit = varint(2) + varint64(9) + newFileEdit(5) + newFileEdit(6) + varint(6) + varint(0) + varint64(5)
+        val third = edit.size / 3
+        val fragmented = logRecord(2, edit.copyOfRange(0, third)) +
+            logRecord(3, edit.copyOfRange(third, 2 * third)) +
+            logRecord(4, edit.copyOfRange(2 * third, edit.size))
+        val live = LevelDbManifest.parse(fragmented)
+        assertEquals(9L, live?.logNumber)
+        assertEquals(setOf(6L), live?.tables)
+    }
+
+    @Test
+    fun `manifest skips block tail padding and rejects truncated or unknown input`() {
+        val first = logRecord(1, varint(2) + varint64(4) + newFileEdit(3))
+        val padded = first + ByteArray(32_768 - first.size) + logRecord(1, newFileEdit(7))
+        assertEquals(setOf(3L, 7L), LevelDbManifest.parse(padded)?.tables)
+        assertEquals(null, LevelDbManifest.parse(first.copyOf(first.size - 3)))
+        assertEquals(null, LevelDbManifest.parse(logRecord(1, varint(2) + varint64(4) + varint(99))))
+        assertEquals(null, LevelDbManifest.parse(logRecord(1, newFileEdit(3))))
+    }
+
+    @Test
+    fun `merges a real leveldb whose newer state lives in the log and ignores a stale log`() {
         val dir = Files.createTempDirectory("leveldb-state").toFile()
         try {
             val key = originPrefix + saltKey.toByteArray(Charsets.US_ASCII)
             val options = Options().createIfMissing(true).compressionType(CompressionType.NONE)
+
+            fun files() = dir.listFiles().orEmpty().filter { it.isFile }.map {
+                it.path.replace('\\', '/') to
+                    it.readBytes()
+            }
             Iq80DBFactory.factory.open(dir, options).use { it.put(key, byteArrayOf(0x01) + "old-salt".toByteArray()) }
+            val staleLog = files().first { it.first.endsWith(".log") }
             Iq80DBFactory.factory.open(dir, options).use { it.put(key, byteArrayOf(0x01) + "new-salt".toByteArray()) }
-            val files = dir.listFiles().orEmpty().filter { it.isFile }.map { it.path to it.readBytes() }
-            assertTrue(files.any { it.first.endsWith(".ldb") || it.first.endsWith(".sst") })
-            assertEquals("new-salt", stateOf(*files.toTypedArray())[saltKey])
-            assertEquals("new-salt", stateOf(*files.reversed().toTypedArray())[saltKey])
+            assertTrue(files().any { it.first.endsWith(".ldb") || it.first.endsWith(".sst") })
+            assertEquals("new-salt", stateOf(files())[saltKey])
+            assertEquals("new-salt", stateOf(files().reversed())[saltKey])
+            // A log left behind by an interrupted cleanup must not override newer tables.
+            assertEquals("new-salt", stateOf(files() + staleLog)[saltKey])
 
             Iq80DBFactory.factory.open(dir, options).use { it.delete(key) }
-            val afterDelete = dir.listFiles().orEmpty().filter { it.isFile }.map { it.path to it.readBytes() }
-            assertTrue(stateOf(*afterDelete.toTypedArray()).isEmpty())
-            assertTrue(stateOf(*afterDelete.reversed().toTypedArray()).isEmpty())
+            assertTrue(stateOf(files()).isEmpty())
+            assertTrue(stateOf(files().reversed()).isEmpty())
+            assertTrue(stateOf(files() + staleLog).isEmpty())
         } finally {
             dir.deleteRecursively()
         }

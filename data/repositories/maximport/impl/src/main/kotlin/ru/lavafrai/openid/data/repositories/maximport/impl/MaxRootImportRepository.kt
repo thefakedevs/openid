@@ -230,11 +230,23 @@ internal class MaxRootImportRepository(
         )
         // A zero account id asks the session to trust the server reply during login.
         val credentials = MaxCredentials(0L, MaxAccessToken(accessToken), deviceId)
-        sessions.open(credentials, profile).use { session ->
-            val result = session.login()
-            val accountId = result.accountId
-            requireData(accountId != null && accountId > 0, "MAX_ACCOUNT_ID_MISSING")
-            return Verified(checkNotNull(accountId), result.rotatedAccessToken?.value ?: accessToken)
+        // The user is sent to MAX during the import, so this app is often backgrounded while the login
+        // is in flight and the OS may cut its sockets. One fresh connection absorbs that; any other
+        // failure, a second connection failure and cancellation are reported as before.
+        var attempt = 0
+        while (true) {
+            try {
+                sessions.open(credentials, profile).use { session ->
+                    val result = session.login()
+                    val accountId = result.accountId
+                    requireData(accountId != null && accountId > 0, "MAX_ACCOUNT_ID_MISSING")
+                    return Verified(checkNotNull(accountId), result.rotatedAccessToken?.value ?: accessToken)
+                }
+            } catch (failure: DataException) {
+                if (failure.code != "MAX_TCP_CONNECTION_FAILED" || ++attempt > 1) throw failure
+                currentCoroutineContext().ensureActive()
+                trace.line("max login connection failed, retrying once")
+            }
         }
     }
 

@@ -10,6 +10,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import ru.lavafrai.openid.data.core.DataException
@@ -125,70 +126,85 @@ internal class MaxRootImportRepository(
         trace.line("session verified accountId=${verified.accountId} rotated=${verified.accessToken != accessToken}")
 
         onStage(RootImportStage.PREPARING_DIGITAL_ID)
-        val material = DidMaterialBuilder()
-        // The embedded frida agent is the primary source: it snapshots the official bridge of the
-        // live Digital ID WebView exactly like the reference exporter. The agent must be attached
-        // while MAX is backgrounded and MAX only brought forward afterwards, so the switch to MAX
-        // (driven by the READING_DIGITAL_ID stage) is deferred until the agent has armed its hook.
         binaryInstalled.await()
-        val fridaCapture = injector.capture(
-            scope = this@coroutineScope,
-            user = user,
-            onAgentReady = { onStage(RootImportStage.READING_DIGITAL_ID) },
-        )
-        when (fridaCapture) {
-            is FridaInjector.Capture.Material -> {
-                val payload = fridaCapture.payload
-                material.addPinSalt(payload["pinSalt"] as? String)
-                material.addTimestamp(payload["creationTimestamp"])
-                material.addBiometryId((payload["biometry"] as? Map<*, *>)?.get("deviceId") as? String)
-                trace.line(
-                    "frida material salt=${material.pinSalt != null} ts=${material.creationTimestamp != null} " +
-                        "bio=${material.biometricDeviceId != null}",
-                )
-            }
-
-            is FridaInjector.Capture.Failed -> trace.line("frida failed: ${fridaCapture.code}")
-        }
-        if (!material.isComplete) materialFromPreferences(records, material)
-        if (!material.isComplete) materialFromLocalStorage(user, material)
-        if (!material.isComplete) materialFromRawSweep(user, records, material)
-        trace.line(
-            "file material complete=${material.isComplete} salt=${material.pinSalt != null} " +
-                "ts=${material.creationTimestamp != null} bio=${material.biometricDeviceId != null}",
-        )
-
-        val did = if (material.isComplete) {
-            ImportedDigitalId(
-                biometricDeviceId = checkNotNull(material.biometricDeviceId),
-                creationTimestamp = checkNotNull(material.creationTimestamp),
-                pinSalt = checkNotNull(material.pinSalt),
+        // The first capture can miss even when the Digital ID is unlocked: MAX may not have rendered
+        // the live Digital ID WebView into its heap yet, so the agent's single onResume snapshot and
+        // the file/log/memory fallbacks all come back empty and the pass would surface
+        // DID_TOKEN_NOT_RUNNING. That first pass still brings MAX forward and warms the WebView, so a
+        // re-run reliably succeeds — exactly what a manual restart did. The whole acquisition is
+        // therefore retried a bounded number of times before the error is surfaced.
+        var captured: ImportedDigitalId? = null
+        for (attempt in 1..DID_CAPTURE_ATTEMPTS) {
+            val lastAttempt = attempt == DID_CAPTURE_ATTEMPTS
+            val material = DidMaterialBuilder()
+            // The embedded frida agent is the primary source: it snapshots the official bridge of the
+            // live Digital ID WebView exactly like the reference exporter. The agent must be attached
+            // while MAX is backgrounded and MAX only brought forward afterwards, so the switch to MAX
+            // (driven by the READING_DIGITAL_ID stage) is deferred until the agent has armed its hook.
+            val fridaCapture = injector.capture(
+                scope = this@coroutineScope,
+                user = user,
+                onAgentReady = { onStage(RootImportStage.READING_DIGITAL_ID) },
             )
-        } else {
-            // MAX encrypts its SecureStorage at rest; the plaintext never reaches the disk.
-            // The last authorization token does reach MAX's own bridge log files, so read it
-            // there first; the process memory ring is the fallback.
-            onStage(RootImportStage.READING_DIGITAL_ID)
-            val fromLogs = tokenFromLogs(user)
-            when {
-                fromLogs.size > 1 -> throw DataException("DID_TOKEN_AMBIGUOUS")
+            when (fridaCapture) {
+                is FridaInjector.Capture.Material -> {
+                    val payload = fridaCapture.payload
+                    material.addPinSalt(payload["pinSalt"] as? String)
+                    material.addTimestamp(payload["creationTimestamp"])
+                    material.addBiometryId((payload["biometry"] as? Map<*, *>)?.get("deviceId") as? String)
+                    trace.line(
+                        "frida material salt=${material.pinSalt != null} ts=${material.creationTimestamp != null} " +
+                            "bio=${material.biometricDeviceId != null}",
+                    )
+                }
 
-                fromLogs.size == 1 -> ImportedDigitalId(biometricToken = DigitalIdToken(fromLogs.first()))
+                is FridaInjector.Capture.Failed -> trace.line("frida failed: ${fridaCapture.code}")
+            }
+            if (!material.isComplete) materialFromPreferences(records, material)
+            if (!material.isComplete) materialFromLocalStorage(user, material)
+            if (!material.isComplete) materialFromRawSweep(user, records, material)
+            trace.line(
+                "file material complete=${material.isComplete} salt=${material.pinSalt != null} " +
+                    "ts=${material.creationTimestamp != null} bio=${material.biometricDeviceId != null}",
+            )
 
-                else -> {
-                    onStage(RootImportStage.SCANNING_MEMORY)
-                    when (val capture = MemoryTokenScanner(shell, RootImportPackages.MAX, user, trace).capture()) {
-                        MemoryTokenScanner.Capture.NotFound -> throw DataException("DID_TOKEN_NOT_RUNNING")
+            captured = if (material.isComplete) {
+                ImportedDigitalId(
+                    biometricDeviceId = checkNotNull(material.biometricDeviceId),
+                    creationTimestamp = checkNotNull(material.creationTimestamp),
+                    pinSalt = checkNotNull(material.pinSalt),
+                )
+            } else {
+                // MAX encrypts its SecureStorage at rest; the plaintext never reaches the disk.
+                // The last authorization token does reach MAX's own bridge log files, so read it
+                // there first; the process memory ring is the fallback.
+                onStage(RootImportStage.READING_DIGITAL_ID)
+                val fromLogs = tokenFromLogs(user)
+                when {
+                    fromLogs.size > 1 -> throw DataException("DID_TOKEN_AMBIGUOUS")
 
-                        MemoryTokenScanner.Capture.Ambiguous -> throw DataException("DID_TOKEN_AMBIGUOUS")
+                    fromLogs.size == 1 -> ImportedDigitalId(biometricToken = DigitalIdToken(fromLogs.first()))
 
-                        is MemoryTokenScanner.Capture.Token -> ImportedDigitalId(
-                            biometricToken = DigitalIdToken(capture.value),
-                        )
+                    else -> {
+                        onStage(RootImportStage.SCANNING_MEMORY)
+                        when (val capture = MemoryTokenScanner(shell, RootImportPackages.MAX, user, trace).capture()) {
+                            MemoryTokenScanner.Capture.NotFound ->
+                                if (lastAttempt) throw DataException("DID_TOKEN_NOT_RUNNING") else null
+
+                            MemoryTokenScanner.Capture.Ambiguous -> throw DataException("DID_TOKEN_AMBIGUOUS")
+
+                            is MemoryTokenScanner.Capture.Token -> ImportedDigitalId(
+                                biometricToken = DigitalIdToken(capture.value),
+                            )
+                        }
                     }
                 }
             }
+            if (captured != null) break
+            trace.line("digital id not resident yet, retrying attempt=$attempt")
+            delay(DID_RETRY_DELAY_MILLIS)
         }
+        val did = checkNotNull(captured)
         trace.line("assembling account tokenProfile=${did.tokenProfile}")
         trace.clear()
         ImportedAccount(
@@ -544,5 +560,11 @@ internal class MaxRootImportRepository(
         const val MAX_TOTAL_BYTES = 32_000_000L
         const val READ_TIMEOUT_MILLIS = 20_000L
         const val SWEEP_TIMEOUT_MILLIS = 30_000L
+
+        // Full Digital ID capture passes before DID_TOKEN_NOT_RUNNING is surfaced. The first pass
+        // can come back empty while it warms MAX's live WebView into the heap; a second pass then
+        // finds the token, which is what a manual import restart did.
+        const val DID_CAPTURE_ATTEMPTS = 2
+        const val DID_RETRY_DELAY_MILLIS = 1_500L
     }
 }

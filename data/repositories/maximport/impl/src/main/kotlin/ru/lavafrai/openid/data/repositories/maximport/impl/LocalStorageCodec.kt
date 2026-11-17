@@ -27,19 +27,83 @@ internal object LocalStorageCodec {
         0xdb.toByte(),
     )
 
+    /** One key's newest state seen in a single LevelDB file; [value] is null for a deletion. */
+    data class Versioned(
+        val version: Long,
+        val value: String?,
+    )
+
+    /** Sequence numbers are 56-bit, so every log version sorts after every table version. */
+    private const val LOG_VERSION_BASE = 1L shl 60
+
     fun scan(
         raw: ByteArray,
         keys: Set<String>,
         origin: String = "https://digital-id.max.ru",
-    ): Map<String, String> {
+    ): Map<String, String> = scanVersioned(raw, keys, origin, 0)
+        .mapNotNull { (key, entry) -> entry.value?.let { key to it } }
+        .toMap()
+
+    /**
+     * Like [scan] but keeps deletions and a version so entries from several files of one LevelDB
+     * can be merged: a table entry is versioned by its sequence number, a log entry by
+     * [LOG_VERSION_BASE] + [logNumber] (the live log always holds writes newer than any table).
+     */
+    fun scanVersioned(
+        raw: ByteArray,
+        keys: Set<String>,
+        origin: String = "https://digital-id.max.ru",
+        logNumber: Long,
+    ): Map<String, Versioned> {
         val originPrefix = byteArrayOf(0x5F) + origin.toByteArray(Charsets.US_ASCII) + byteArrayOf(0x00, 0x01)
-        val found = mutableMapOf<String, String>()
+        val found = mutableMapOf<String, Versioned>()
         // An SSTable file and a WAL/log file are distinct, self-contained formats. An SSTable
         // resolves each key authoritatively (to a value or to a tombstone), so the raw log scan
         // must NOT also run over it: doing so would let the byte-level search resurrect a key the
         // table marked deleted. Only a file without an SSTable footer is treated as a WAL log.
-        if (isSsTable(raw)) scanSsTable(raw, originPrefix, keys, found) else scanLog(raw, originPrefix, keys, found)
+        if (isSsTable(raw)) {
+            scanSsTable(raw, originPrefix, keys, found)
+        } else {
+            scanLog(raw, originPrefix, keys, LOG_VERSION_BASE + logNumber, found)
+        }
         return found
+    }
+
+    /**
+     * Merges every table and log of one LevelDB directory into the database's current state: the
+     * newest version of a key wins and a deletion in a newer file hides older values. Files that
+     * are neither tables nor logs (MANIFEST, LOG, LOCK...) are ignored.
+     */
+    class State(private val keys: Set<String>) {
+        private val merged = mutableMapOf<String, Versioned>()
+        private var incomplete = false
+
+        /** A table or log could not be read in full, so the merged state may miss newer writes. */
+        fun markIncomplete() {
+            incomplete = true
+        }
+
+        fun add(
+            path: String,
+            raw: ByteArray,
+        ) {
+            val name = path.substringAfterLast('/')
+            val number = name.substringBefore('.').toLongOrNull() ?: 0L
+            val isLog = name.endsWith(".log")
+            if (!isLog && !name.endsWith(".ldb") && !name.endsWith(".sst")) return
+            for ((key, entry) in scanVersioned(raw, keys, logNumber = number)) {
+                val current = merged[key]
+                if (current == null || entry.version > current.version) merged[key] = entry
+            }
+        }
+
+        /** Empty when any file was skipped: freshness of the remaining values cannot be established. */
+        fun values(): Map<String, String> {
+            if (incomplete) return emptyMap()
+            val result = mutableMapOf<String, String>()
+            for ((key, entry) in merged) entry.value?.let { result[key] = it }
+            return result
+        }
     }
 
     // ---- WAL / log scan (original implementation) ----
@@ -48,7 +112,8 @@ internal object LocalStorageCodec {
         raw: ByteArray,
         originPrefix: ByteArray,
         keys: Set<String>,
-        found: MutableMap<String, String>,
+        version: Long,
+        found: MutableMap<String, Versioned>,
     ) {
         for (key in keys) {
             if (key in found) continue
@@ -66,8 +131,10 @@ internal object LocalStorageCodec {
                 }
                 index = raw.indexOf(pattern, index + 1)
             }
-            if (lastValue != null && lastValuePosition == lastMatchPosition) {
-                found[key] = lastValue
+            if (lastMatchPosition >= 0) {
+                // A last occurrence that is not a decodable value is a deletion (or unreadable):
+                // record it so an older table cannot resurrect the key.
+                found[key] = Versioned(version, lastValue.takeIf { lastValuePosition == lastMatchPosition })
             }
         }
     }
@@ -103,7 +170,7 @@ internal object LocalStorageCodec {
         raw: ByteArray,
         originPrefix: ByteArray,
         keys: Set<String>,
-        found: MutableMap<String, String>,
+        found: MutableMap<String, Versioned>,
     ) {
         val remaining = keys - found.keys
         if (remaining.isEmpty()) return
@@ -145,12 +212,17 @@ internal object LocalStorageCodec {
             parseBlock(block) { key, value ->
                 if (key.size < 8) return@parseBlock
                 val typeTag = key[key.size - 8].toInt() and 0xFF
+                var sequence = 0L
+                for (i in 7 downTo 1) sequence = (sequence shl 8) or (key[key.size - 8 + i].toLong() and 0xFF)
                 val userKeyLen = key.size - 8
                 for ((name, pattern) in targetPatterns) {
-                    if (name in resolved || name in found) continue
+                    if (name in resolved) continue
                     if (userKeyLen == pattern.size && prefixMatches(key, pattern)) {
                         resolved += name
-                        if (typeTag == 1) decodePayload(value, 0, value.size)?.let { found[name] = it }
+                        found[name] = Versioned(
+                            sequence,
+                            if (typeTag == 1) decodePayload(value, 0, value.size) else null,
+                        )
                     }
                 }
             }

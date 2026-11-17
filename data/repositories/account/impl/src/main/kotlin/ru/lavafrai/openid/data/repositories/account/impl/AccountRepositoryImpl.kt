@@ -166,7 +166,12 @@ class AccountRepositoryImpl(private val storage: SecretStorage) : AccountReposit
                 // format with a fresh key, then unlock the upgraded row.
                 secret.close()
                 handedOff = true
-                write(account, row)
+                try {
+                    write(account, row)
+                } catch (failure: DataException) {
+                    // A concurrent unlock or token update already replaced the row; use its result.
+                    if (failure.code != "ACCOUNT_CHANGED") throw failure
+                }
                 return unlock()
             }
             currentCoroutineContext().ensureActive()

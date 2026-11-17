@@ -311,17 +311,27 @@ internal class MaxRootImportRepository(
             ignoreExitCode = true,
         ) ?: return
         var files = 0
+        val state = LocalStorageCodec.State(LOCAL_STORAGE_KEYS)
         for (path in listing.split('\u0000')) {
-            if (!path.contains("leveldb") || files >= MAX_FILES) continue
-            val raw = shell.binary("head -c ${MAX_FILE_BYTES + 1} ${shellArg(path)}", ignoreExitCode = true) ?: continue
-            if (raw.size > MAX_FILE_BYTES) continue
+            if (!path.contains("leveldb")) continue
+            if (files >= MAX_FILES) {
+                state.markIncomplete()
+                continue
+            }
+            val raw = shell.binary("head -c ${MAX_FILE_BYTES + 1} ${shellArg(path)}", ignoreExitCode = true)
+            if (raw == null || raw.size > MAX_FILE_BYTES) {
+                state.markIncomplete()
+                continue
+            }
             files++
-            val values = LocalStorageCodec.scan(raw, setOf(KEY_PIN_SALT, KEY_CREATION_TIMESTAMP))
-            material.addPinSaltEnvelope(values[KEY_PIN_SALT], nowMillis())
-            material.addTimestampEnvelope(values[KEY_CREATION_TIMESTAMP], nowMillis())
+            state.add(path, raw)
             currentCoroutineContext().ensureActive()
-            if (material.isComplete) return
         }
+        // Only the merged state of the whole database is trustworthy: a value read from one file may
+        // be superseded or deleted by another, so nothing is applied until every file was merged.
+        val values = state.values()
+        material.addPinSaltEnvelope(values[KEY_PIN_SALT], nowMillis())
+        material.addTimestampEnvelope(values[KEY_CREATION_TIMESTAMP], nowMillis())
     }
 
     private suspend fun materialFromRawSweep(
@@ -337,22 +347,23 @@ internal class MaxRootImportRepository(
             ignoreExitCode = true,
         ) ?: return
         var files = 0
+        val localStorage = LocalStorageCodec.State(LOCAL_STORAGE_KEYS)
         for (path in listing.split('\n')) {
             if (files >= MAX_FILES) break
             if (!path.startsWith("/data/user/$user/${RootImportPackages.MAX}")) continue
-            val raw = shell.binary("head -c ${MAX_FILE_BYTES + 1} ${shellArg(path)}", ignoreExitCode = true) ?: continue
-            if (raw.size > MAX_FILE_BYTES) continue
+            val raw = shell.binary("head -c ${MAX_FILE_BYTES + 1} ${shellArg(path)}", ignoreExitCode = true)
+            if (raw == null || raw.size > MAX_FILE_BYTES) {
+                if (path.contains("leveldb")) localStorage.markIncomplete()
+                continue
+            }
             files++
             when {
                 path.endsWith(".prefs") -> materialFromPreferences(parsePrefs(raw), material)
 
                 path.endsWith(".xml") -> materialFromPreferences(XmlPrefsCodec.parse(raw), material)
 
-                path.contains("leveldb") -> {
-                    val values = LocalStorageCodec.scan(raw, setOf(KEY_PIN_SALT, KEY_CREATION_TIMESTAMP))
-                    material.addPinSaltEnvelope(values[KEY_PIN_SALT], nowMillis())
-                    material.addTimestampEnvelope(values[KEY_CREATION_TIMESTAMP], nowMillis())
-                }
+                // Merged after the loop: one file alone cannot tell whether a key was superseded.
+                path.contains("leveldb") -> localStorage.add(path, raw)
 
                 else -> {
                     material.addPinSaltEnvelope(RawFileScanner.envelopes(raw, KEY_PIN_SALT).firstOrNull(), nowMillis())
@@ -364,6 +375,10 @@ internal class MaxRootImportRepository(
             }
             currentCoroutineContext().ensureActive()
             if (material.isComplete) return
+        }
+        localStorage.values().let { values ->
+            material.addPinSaltEnvelope(values[KEY_PIN_SALT], nowMillis())
+            material.addTimestampEnvelope(values[KEY_CREATION_TIMESTAMP], nowMillis())
         }
         if (!material.isComplete) materialFromPreferences(records, material)
     }
@@ -448,6 +463,7 @@ internal class MaxRootImportRepository(
         const val KEY_BOT_ID = "digitalid-botid"
         const val KEY_PIN_SALT = "pin_salt::digitalId"
         const val KEY_CREATION_TIMESTAMP = "creation_timestamp::digitalId"
+        private val LOCAL_STORAGE_KEYS = setOf(KEY_PIN_SALT, KEY_CREATION_TIMESTAMP)
         const val BIOMETRY_FRAGMENT = "biomet"
         const val KSUD_LIBRARY = "libksud.so"
         val SESSION_STRING_KEYS = setOf(KEY_ACCESS_TOKEN, KEY_DEVICE_ID, KEY_PIN_SALT, KEY_CREATION_TIMESTAMP)

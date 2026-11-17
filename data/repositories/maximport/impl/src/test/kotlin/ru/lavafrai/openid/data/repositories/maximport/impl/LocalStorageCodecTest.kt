@@ -141,6 +141,68 @@ class LocalStorageCodecTest {
         }
     }
 
+    private val saltKey = "pin_salt::digitalId"
+
+    private fun stateOf(vararg files: Pair<String, ByteArray>): Map<String, String> {
+        val state = LocalStorageCodec.State(setOf(saltKey))
+        files.forEach { (path, raw) -> state.add(path, raw) }
+        return state.values()
+    }
+
+    @Test
+    fun `log write newer than a table wins in either file order`() {
+        val table = "/db/000005.ldb" to buildSsTable(saltKey to "old-salt")
+        val log = "/db/000008.log" to entry(saltKey, "new-salt")
+        assertEquals("new-salt", stateOf(table, log)[saltKey])
+        assertEquals("new-salt", stateOf(log, table)[saltKey])
+    }
+
+    @Test
+    fun `log deletion hides an older table value in either file order`() {
+        val table = "/db/000005.ldb" to buildSsTable(saltKey to "old-salt")
+        val tombstone = "/db/000008.log" to
+            (originPrefix + saltKey.toByteArray(Charsets.US_ASCII) + byteArrayOf(0xFF.toByte()))
+        assertTrue(stateOf(table, tombstone).isEmpty())
+        assertTrue(stateOf(tombstone, table).isEmpty())
+    }
+
+    @Test
+    fun `skipped file makes the merged state untrusted`() {
+        val state = LocalStorageCodec.State(setOf(saltKey))
+        state.add("/db/000005.ldb", buildSsTable(saltKey to "old-salt"))
+        state.markIncomplete()
+        assertTrue(state.values().isEmpty())
+    }
+
+    @Test
+    fun `non table and non log files are ignored`() {
+        val manifest = "/db/MANIFEST-000002" to (originPrefix + saltKey.toByteArray(Charsets.US_ASCII))
+        val table = "/db/000005.ldb" to buildSsTable(saltKey to "salt")
+        assertEquals("salt", stateOf(manifest, table)[saltKey])
+    }
+
+    @Test
+    fun `merges a real leveldb whose newer state lives in the log`() {
+        val dir = Files.createTempDirectory("leveldb-state").toFile()
+        try {
+            val key = originPrefix + saltKey.toByteArray(Charsets.US_ASCII)
+            val options = Options().createIfMissing(true).compressionType(CompressionType.NONE)
+            Iq80DBFactory.factory.open(dir, options).use { it.put(key, byteArrayOf(0x01) + "old-salt".toByteArray()) }
+            Iq80DBFactory.factory.open(dir, options).use { it.put(key, byteArrayOf(0x01) + "new-salt".toByteArray()) }
+            val files = dir.listFiles().orEmpty().filter { it.isFile }.map { it.path to it.readBytes() }
+            assertTrue(files.any { it.first.endsWith(".ldb") || it.first.endsWith(".sst") })
+            assertEquals("new-salt", stateOf(*files.toTypedArray())[saltKey])
+            assertEquals("new-salt", stateOf(*files.reversed().toTypedArray())[saltKey])
+
+            Iq80DBFactory.factory.open(dir, options).use { it.delete(key) }
+            val afterDelete = dir.listFiles().orEmpty().filter { it.isFile }.map { it.path to it.readBytes() }
+            assertTrue(stateOf(*afterDelete.toTypedArray()).isEmpty())
+            assertTrue(stateOf(*afterDelete.reversed().toTypedArray()).isEmpty())
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
     /** Builds a minimal SSTable with uncompressed data/index blocks and a valid footer. */
     private fun buildSsTable(vararg entries: Pair<String, String>): ByteArray {
         val sorted = entries.sortedBy { it.first }

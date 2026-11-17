@@ -50,19 +50,23 @@ class TokenProfileLock(
         biometric: Boolean,
     ) {
         // PBKDF2 is deliberately slow: keep it (and the preference writes) off the caller's thread.
-        // NonCancellable: once the lock is written the caller must learn it, otherwise a cancelled
-        // first-time setup would leave a configured lock the UI does not know about.
-        withContext(workDispatcher + NonCancellable) {
-            deleteKey()
-            val salt = ByteArray(SALT_BYTES).also { SecureRandom().nextBytes(it) }
-            val hash = hash(pin, salt)
-            preferences.edit {
-                putLong("accountId", accountId)
-                putString("salt", salt.encode())
-                putString("hash", hash.encode())
-                putBoolean("biometric", biometric)
+        // NonCancellable is the OUTER context and the dispatcher switch is inside it: returning from a
+        // dispatcher switch into an already cancelled caller would throw and drop the finished result,
+        // while the same-dispatcher NonCancellable wrapper hands it back. Once the lock is written the
+        // caller must learn it, or a cancelled first-time setup leaves a lock the UI does not know about.
+        withContext(NonCancellable) {
+            withContext(workDispatcher) {
+                deleteKey()
+                val salt = ByteArray(SALT_BYTES).also { SecureRandom().nextBytes(it) }
+                val hash = hash(pin, salt)
+                preferences.edit {
+                    putLong("accountId", accountId)
+                    putString("salt", salt.encode())
+                    putString("hash", hash.encode())
+                    putBoolean("biometric", biometric)
+                }
+                if (biometric) runCatching { createKey() }
             }
-            if (biometric) runCatching { createKey() }
         }
     }
 
@@ -75,11 +79,13 @@ class TokenProfileLock(
     suspend fun verify(
         accountId: Long,
         pin: CharArray,
-    ): Boolean = withContext(workDispatcher + NonCancellable) {
-        if (preferences.getLong("accountId", -1) != accountId) return@withContext false
-        val salt = stored("salt", SALT_BYTES)
-        val expected = stored("hash", HASH_BYTES)
-        MessageDigest.isEqual(hash(pin, salt), expected)
+    ): Boolean = withContext(NonCancellable) {
+        withContext(workDispatcher) {
+            if (preferences.getLong("accountId", -1) != accountId) return@withContext false
+            val salt = stored("salt", SALT_BYTES)
+            val expected = stored("hash", HASH_BYTES)
+            MessageDigest.isEqual(hash(pin, salt), expected)
+        }
     }
 
     private fun stored(

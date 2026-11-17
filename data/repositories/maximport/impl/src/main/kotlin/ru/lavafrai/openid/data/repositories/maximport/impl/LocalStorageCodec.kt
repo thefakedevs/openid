@@ -49,13 +49,15 @@ internal object LocalStorageCodec {
      * Like [scan] but keeps deletions and a version so entries from several files of one LevelDB
      * can be merged: a table entry is versioned by its sequence number, a log entry by
      * [LOG_VERSION_BASE] + [logNumber] (the live log always holds writes newer than any table).
-     * Null means the file is a table that is truncated or malformed: nothing about it is trusted.
+     * Null means the file is a table (or [expectTable] says it must be) that is truncated or
+     * malformed: nothing about it is trusted.
      */
     fun scanVersioned(
         raw: ByteArray,
         keys: Set<String>,
         origin: String = "https://digital-id.max.ru",
         logNumber: Long,
+        expectTable: Boolean = false,
     ): Map<String, Versioned>? {
         val originPrefix = byteArrayOf(0x5F) + origin.toByteArray(Charsets.US_ASCII) + byteArrayOf(0x00, 0x01)
         val found = mutableMapOf<String, Versioned>()
@@ -65,6 +67,10 @@ internal object LocalStorageCodec {
         // table marked deleted. Only a file without an SSTable footer is treated as a WAL log.
         if (isSsTable(raw)) {
             if (!scanSsTable(raw, originPrefix, keys, found)) return null
+        } else if (expectTable) {
+            // The file name says table: a damaged footer must not turn it into a log whose byte scan
+            // finds nothing and is then mistaken for a table that holds no newer value.
+            return null
         } else {
             scanLog(raw, originPrefix, keys, LOG_VERSION_BASE + logNumber, found)
         }
@@ -106,7 +112,7 @@ internal object LocalStorageCodec {
                 name.endsWith(".log") -> logs[number] = scanVersioned(raw, keys, logNumber = number).orEmpty()
 
                 name.endsWith(".ldb") || name.endsWith(".sst") ->
-                    tables[number] = scanVersioned(raw, keys, logNumber = number)
+                    tables[number] = scanVersioned(raw, keys, logNumber = number, expectTable = true)
             }
         }
 

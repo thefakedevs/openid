@@ -219,6 +219,16 @@ class LocalStorageCodecTest {
     }
 
     @Test
+    fun `table with a damaged footer is not read as a log`() {
+        val oldTable = "/db/000004.ldb" to buildSsTable(saltKey to "old-salt")
+        val damaged = buildSsTable(saltKey to "new-salt").also { it[it.size - 1] = 0 }
+        assertEquals(null, LocalStorageCodec.scanVersioned(damaged, setOf(saltKey), logNumber = 5, expectTable = true))
+        assertTrue(
+            stateOf(directory(9, oldTable, "/db/000005.ldb" to damaged, liveTables = listOf(4, 5))).isEmpty(),
+        )
+    }
+
+    @Test
     fun `skipped file makes the merged state untrusted`() {
         val state = LocalStorageCodec.State(setOf(saltKey))
         directory(8, "/db/000005.ldb" to buildSsTable(saltKey to "old-salt"), liveTables = listOf(5))

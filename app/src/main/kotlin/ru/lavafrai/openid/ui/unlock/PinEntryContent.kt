@@ -37,6 +37,47 @@ import ru.lavafrai.openid.ui.components.PrimaryButton
 import ru.lavafrai.openid.ui.components.ScreenHeading
 import ru.lavafrai.openid.ui.resolve
 
+/**
+ * Shared layout for a PIN-entry screen: the keypad ([controls]) sits at a fixed position, right
+ * below a flexible [status] area (heading, error, message) that is itself bottom-aligned within
+ * the space above it. A flat, top-down `Column` would instead let the keypad's position shift
+ * with every change in [status]'s height - an error card, a longer heading, or a countdown
+ * message appearing or disappearing would visibly move the keypad up or down between attempts.
+ * [scrollResetKeys] restart the status area's own scroll at the top when any of them changes.
+ */
+@Composable
+internal fun PinEntryLayout(
+    status: @Composable () -> Unit,
+    vararg scrollResetKeys: Any?,
+    controls: @Composable (compact: Boolean) -> Unit,
+) {
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val compact = maxHeight < 640.dp
+        val gap = if (compact) 8.dp else 20.dp
+        val scrollWholeScreen = LocalDensity.current.fontScale > 1.3f || maxHeight < 480.dp
+        if (scrollWholeScreen) {
+            // At large text sizes, use one continuous page instead of clipping the keypad footer.
+            Column(
+                Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(gap),
+            ) {
+                status()
+                controls(compact)
+            }
+        } else {
+            val statusScroll = rememberScrollState()
+            LaunchedEffect(*scrollResetKeys) { statusScroll.scrollTo(0) }
+            Column(Modifier.fillMaxSize().padding(bottom = if (compact) 0.dp else 28.dp)) {
+                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.BottomCenter) {
+                    Column(Modifier.fillMaxWidth().verticalScroll(statusScroll)) { status() }
+                }
+                Spacer(Modifier.height(gap))
+                controls(compact)
+            }
+        }
+    }
+}
+
 @Composable
 internal fun PinEntryContent(
     state: PocketUiState,
@@ -47,11 +88,8 @@ internal fun PinEntryContent(
     onHelp: () -> Unit,
 ) {
     val canSubmit = !state.busy && state.retrySeconds == 0
-    BoxWithConstraints(Modifier.fillMaxSize()) {
-        val compact = maxHeight < 640.dp
-        val gap = if (compact) 8.dp else 20.dp
-        val scrollWholeScreen = LocalDensity.current.fontScale > 1.3f || maxHeight < 480.dp
-        val status: @Composable () -> Unit = {
+    PinEntryLayout(
+        status = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 if (state.retrySeconds > 0) {
                     Text(
@@ -78,51 +116,32 @@ internal fun PinEntryContent(
                     )
                 }
             }
-        }
-        val controls: @Composable () -> Unit = {
-            Column(
-                Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(gap),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                PinDots(state.pin.length)
-                PinKeyboard(
-                    state.pin,
-                    onPinChange,
-                    canSubmit,
-                    onBiometric,
-                    keyMinHeight = if (compact) 56.dp else 64.dp,
-                )
-                PrimaryButton(
-                    stringResource(if (state.willSavePin) R.string.pin_save_and_open else R.string.qr_open),
-                    onSubmit,
-                    enabled = canSubmit && state.pin.length == 4,
-                    icon = Symbols.drawable.materialsymbols_ic_qr_code_2_rounded,
-                )
-                TextButton(onClick = onHelp, enabled = !state.busy) { Text(stringResource(R.string.pin_help_action)) }
-            }
-        }
-        if (scrollWholeScreen) {
-            // At large text sizes, use one continuous page instead of clipping the keypad footer.
-            Column(
-                Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(gap),
-            ) {
-                status()
-                controls()
-            }
-        } else {
-            val statusScroll = rememberScrollState()
-            LaunchedEffect(state.error, state.message, state.busy, state.retrySeconds > 0) {
-                statusScroll.scrollTo(0)
-            }
-            Column(Modifier.fillMaxSize().padding(bottom = if (compact) 0.dp else 28.dp)) {
-                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.BottomCenter) {
-                    Column(Modifier.fillMaxWidth().verticalScroll(statusScroll)) { status() }
-                }
-                Spacer(Modifier.height(gap))
-                controls()
-            }
+        },
+        state.error,
+        state.message,
+        state.busy,
+        state.retrySeconds > 0,
+    ) { compact ->
+        Column(
+            Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(if (compact) 8.dp else 20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            PinDots(state.pin.length)
+            PinKeyboard(
+                state.pin,
+                onPinChange,
+                canSubmit,
+                onBiometric,
+                keyMinHeight = if (compact) 56.dp else 64.dp,
+            )
+            PrimaryButton(
+                stringResource(if (state.willSavePin) R.string.pin_save_and_open else R.string.qr_open),
+                onSubmit,
+                enabled = canSubmit && state.pin.length == 4,
+                icon = Symbols.drawable.materialsymbols_ic_qr_code_2_rounded,
+            )
+            TextButton(onClick = onHelp, enabled = !state.busy) { Text(stringResource(R.string.pin_help_action)) }
         }
     }
 }

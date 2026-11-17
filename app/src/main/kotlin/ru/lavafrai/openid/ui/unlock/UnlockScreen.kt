@@ -3,6 +3,7 @@ package ru.lavafrai.openid.ui.unlock
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -58,52 +59,68 @@ fun UnlockScreen(
     }
     if (state.tokenProfile && !state.accountMigrationRequired) {
         if (manualEntry || !state.tokenLockBiometricAvailable) {
-            Column(
-                verticalArrangement = Arrangement.spacedBy(20.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                state.error?.let { error -> ErrorCard(error, { onRecoverError(error) }, enabled = canSubmit) }
-                if (state.error == null) {
-                    ScreenHeading(
+            // Kept at a fixed position below the status area (see PinEntryLayout) instead of a flat
+            // Column, so the keypad doesn't visibly jump up or down as the error card, heading or
+            // countdown message above it appear, disappear or change length between attempts.
+            PinEntryLayout(
+                status = {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        if (state.retrySeconds > 0) {
+                            Text(
+                                stringResource(R.string.pin_retry_countdown, state.retrySeconds),
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        state.error?.let { error -> ErrorCard(error, { onRecoverError(error) }, enabled = canSubmit) }
+                        if (state.error == null) {
+                            ScreenHeading(
+                                stringResource(
+                                    if (state.tokenLockConfigured) {
+                                        R.string.token_lock_enter_title
+                                    } else {
+                                        R.string.token_lock_create_title
+                                    },
+                                ),
+                                stringResource(R.string.token_lock_save_description).takeIf {
+                                    !state.tokenLockConfigured && state.unlockPinProtection == PinProtection.BIOMETRIC
+                                },
+                            )
+                        }
+                        state.message?.let {
+                            InfoCard(
+                                it.resolve(),
+                                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                                icon = Symbols.drawable.materialsymbols_ic_info_rounded,
+                            )
+                        }
+                    }
+                },
+                state.error,
+                state.message,
+                state.tokenLockConfigured,
+                state.retrySeconds > 0,
+            ) { compact ->
+                Column(
+                    Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(if (compact) 8.dp else 20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    PinDots(state.pin.length)
+                    PinKeyboard(
+                        state.pin,
+                        onPinChange,
+                        canSubmit,
+                        onBiometric = onSavedPin.takeIf { state.tokenLockBiometricAvailable },
+                        keyMinHeight = if (compact) 56.dp else 64.dp,
+                    )
+                    PrimaryButton(
                         stringResource(
-                            if (state.tokenLockConfigured) {
-                                R.string.token_lock_enter_title
-                            } else {
-                                R.string.token_lock_create_title
-                            },
+                            if (state.tokenLockConfigured) R.string.qr_open else R.string.pin_save_and_open,
                         ),
-                        stringResource(R.string.token_lock_save_description).takeIf {
-                            !state.tokenLockConfigured && state.unlockPinProtection == PinProtection.BIOMETRIC
-                        },
-                    )
-                }
-                PinDots(state.pin.length)
-                PinKeyboard(
-                    state.pin,
-                    onPinChange,
-                    canSubmit,
-                    onBiometric = onSavedPin.takeIf { state.tokenLockBiometricAvailable },
-                    keyMinHeight = 64.dp,
-                )
-                PrimaryButton(
-                    stringResource(
-                        if (state.tokenLockConfigured) R.string.qr_open else R.string.pin_save_and_open,
-                    ),
-                    onSubmit,
-                    enabled = canSubmit && state.pin.length == 4,
-                    icon = Symbols.drawable.materialsymbols_ic_qr_code_2_rounded,
-                )
-                if (state.retrySeconds > 0) {
-                    Text(
-                        stringResource(R.string.pin_retry_countdown, state.retrySeconds),
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-                state.message?.let {
-                    InfoCard(
-                        it.resolve(),
-                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-                        icon = Symbols.drawable.materialsymbols_ic_info_rounded,
+                        onSubmit,
+                        enabled = canSubmit && state.pin.length == 4,
+                        icon = Symbols.drawable.materialsymbols_ic_qr_code_2_rounded,
                     )
                 }
             }

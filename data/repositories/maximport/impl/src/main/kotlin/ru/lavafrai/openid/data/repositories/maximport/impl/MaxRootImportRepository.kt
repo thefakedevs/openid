@@ -3,6 +3,7 @@ package ru.lavafrai.openid.data.repositories.maximport.impl
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.Process
 import android.webkit.WebSettings
 import java.io.File
 import kotlinx.coroutines.Dispatchers
@@ -28,6 +29,12 @@ import ru.lavafrai.openid.models.max.MaxAccessToken
 import ru.lavafrai.openid.models.max.MaxClientProfile
 import ru.lavafrai.openid.models.max.MaxCredentials
 import ru.lavafrai.openid.models.max.MaxUserAgent
+
+/** Pure so the AOSP `--user` semantics can be checked without a device: see MaxRootImportRepository.returnToApp. */
+internal fun buildReturnToAppCommand(
+    component: String,
+    userId: Int,
+): String = "am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -n $component --user $userId"
 
 /**
  * Pulls the MAX session and Digital ID material from local storage on this device via root.
@@ -78,12 +85,13 @@ internal class MaxRootImportRepository(
             ?.flattenToShortString()
             ?.takeIf { APP_COMPONENT.matches(it) }
             ?: return
-        // Same intent the launcher sends, so the existing task is resumed instead of a second
-        // activity (and a second ViewModel) being created on top of it.
-        shell.text(
-            "am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -n $component",
-            ignoreExitCode = true,
-        )
+        // `am start` run as root defaults to the foreground Android user, not this app's own
+        // profile: if OpenID and MAX run in a work profile while the personal profile is in the
+        // foreground, an unqualified command would open (or fail to find) the wrong copy of the
+        // app. --user pins it to this process's own profile, derived the same way packageUser()
+        // derives another app's from its UID.
+        val userId = Process.myUid() / ANDROID_USER_RANGE
+        shell.text(buildReturnToAppCommand(component, userId), ignoreExitCode = true)
     }
 
     override suspend fun extract(onStage: (RootImportStage) -> Unit): ImportedAccount = coroutineScope {
@@ -216,7 +224,7 @@ internal class MaxRootImportRepository(
     }
 
     private suspend fun packageUser(): Int = withContext(Dispatchers.IO) {
-        runCatching { context.packageManager.getApplicationInfo(RootImportPackages.MAX, 0).uid / 100_000 }
+        runCatching { context.packageManager.getApplicationInfo(RootImportPackages.MAX, 0).uid / ANDROID_USER_RANGE }
             .getOrDefault(-1)
     }
 
@@ -520,6 +528,9 @@ internal class MaxRootImportRepository(
         const val KEY_CREATION_TIMESTAMP = "creation_timestamp::digitalId"
         private const val MAX_LEVELDB_DIRECTORIES = 4
         private val APP_COMPONENT = Regex("[A-Za-z0-9_.]+/[A-Za-z0-9_.]+")
+
+        /** UID-to-user-id divisor (AOSP's hidden UserHandle.PER_USER_RANGE); stable across Android versions. */
+        internal const val ANDROID_USER_RANGE = 100_000
         private val LOCAL_STORAGE_KEYS = setOf(KEY_PIN_SALT, KEY_CREATION_TIMESTAMP)
         const val BIOMETRY_FRAGMENT = "biomet"
         const val KSUD_LIBRARY = "libksud.so"

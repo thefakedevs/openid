@@ -72,6 +72,140 @@ class LocalStorageCodecTest {
         val raw = putRecord + tombstone
         assertTrue(LocalStorageCodec.scan(raw, setOf("pin_salt::digitalId")).isEmpty())
     }
+
+    @Test
+    fun `reads values from an uncompressed sstable`() {
+        val raw = buildSsTable("pin_salt::digitalId" to "the-salt")
+        val values = LocalStorageCodec.scan(raw, setOf("pin_salt::digitalId"))
+        assertEquals("the-salt", values["pin_salt::digitalId"])
+    }
+
+    @Test
+    fun `reads multiple keys from sstable`() {
+        val raw = buildSsTable(
+            "creation_timestamp::digitalId" to "1735689600000",
+            "pin_salt::digitalId" to "the-salt",
+        )
+        val values = LocalStorageCodec.scan(raw, setOf("pin_salt::digitalId", "creation_timestamp::digitalId"))
+        assertEquals("the-salt", values["pin_salt::digitalId"])
+        assertEquals("1735689600000", values["creation_timestamp::digitalId"])
+    }
+
+    @Test
+    fun `sstable delete entry is not returned`() {
+        val raw = buildSsTableWithDelete("pin_salt::digitalId")
+        assertTrue(LocalStorageCodec.scan(raw, setOf("pin_salt::digitalId")).isEmpty())
+    }
+
+    /** Builds a minimal SSTable with uncompressed data/index blocks and a valid footer. */
+    private fun buildSsTable(vararg entries: Pair<String, String>): ByteArray {
+        val sorted = entries.sortedBy { it.first }
+        val dataBlock = buildDataBlock(
+            sorted.map { (key, value) ->
+                val userKey = originPrefix + key.toByteArray(Charsets.US_ASCII)
+                val internalKey = userKey + packSequenceType(1L, 1)
+                val payload = byteArrayOf(0x01) + value.toByteArray(Charsets.ISO_8859_1)
+                internalKey to payload
+            },
+        )
+        val dataBlockOffset = 0
+        val dataBlockSize = dataBlock.size
+        val indexBlock = buildDataBlock(
+            listOf(
+                dataBlock.let {
+                    val lastUserKey = originPrefix + sorted.last().first.toByteArray(Charsets.US_ASCII)
+                    val separatorKey = lastUserKey + packSequenceType(1L, 1)
+                    separatorKey to (varint64(dataBlockOffset.toLong()) + varint64(dataBlockSize.toLong()))
+                },
+            ),
+        )
+        val indexBlockOffset = dataBlockSize + 5
+        val indexBlockSize = indexBlock.size
+        val footer = buildFooter(0, 0, indexBlockOffset.toLong(), indexBlockSize.toLong())
+        return dataBlock + byteArrayOf(0x00, 0, 0, 0, 0) +
+            indexBlock + byteArrayOf(0x00, 0, 0, 0, 0) +
+            footer
+    }
+
+    private fun buildSsTableWithDelete(key: String): ByteArray {
+        val userKey = originPrefix + key.toByteArray(Charsets.US_ASCII)
+        val internalKey = userKey + packSequenceType(1L, 0)
+        val dataBlock = buildDataBlock(listOf(internalKey to ByteArray(0)))
+        val dataBlockOffset = 0
+        val dataBlockSize = dataBlock.size
+        val separatorKey = userKey + packSequenceType(1L, 0)
+        val indexBlock = buildDataBlock(
+            listOf(
+                separatorKey to (varint64(dataBlockOffset.toLong()) + varint64(dataBlockSize.toLong())),
+            ),
+        )
+        val indexBlockOffset = dataBlockSize + 5
+        val indexBlockSize = indexBlock.size
+        val footer = buildFooter(0, 0, indexBlockOffset.toLong(), indexBlockSize.toLong())
+        return dataBlock + byteArrayOf(0x00, 0, 0, 0, 0) +
+            indexBlock + byteArrayOf(0x00, 0, 0, 0, 0) +
+            footer
+    }
+
+    private fun buildDataBlock(entries: List<Pair<ByteArray, ByteArray>>): ByteArray {
+        val buf = mutableListOf<Byte>()
+        val restarts = mutableListOf<Int>()
+        var prevKey = ByteArray(0)
+        for ((i, pair) in entries.withIndex()) {
+            val (key, value) = pair
+            restarts += buf.size
+            buf += varint(0).toList()
+            buf += varint(key.size).toList()
+            buf += varint(value.size).toList()
+            buf += key.toList()
+            buf += value.toList()
+            prevKey = key
+        }
+        for (r in restarts) {
+            buf += int32LE(r).toList()
+        }
+        buf += int32LE(restarts.size).toList()
+        return buf.toByteArray()
+    }
+
+    private fun buildFooter(
+        metaOffset: Long,
+        metaSize: Long,
+        indexOffset: Long,
+        indexSize: Long,
+    ): ByteArray {
+        val handles = varint64(metaOffset) + varint64(metaSize) + varint64(indexOffset) + varint64(indexSize)
+        val padding = ByteArray(40 - handles.size)
+        val magic = byteArrayOf(0x57, 0xfb.toByte(), 0x80.toByte(), 0x8b.toByte(), 0x24, 0x75, 0x74, 0x68)
+        return handles + padding + magic
+    }
+
+    private fun packSequenceType(
+        sequence: Long,
+        type: Int,
+    ): ByteArray {
+        val packed = (sequence shl 8) or type.toLong()
+        return ByteArray(8) { i -> ((packed ushr (i * 8)) and 0xFF).toByte() }
+    }
+
+    private fun varint64(value: Long): ByteArray {
+        var remaining = value
+        val bytes = mutableListOf<Byte>()
+        while (true) {
+            var byte = (remaining and 0x7F).toInt()
+            remaining = remaining ushr 7
+            if (remaining != 0L) byte = byte or 0x80
+            bytes += byte.toByte()
+            if (remaining == 0L) return bytes.toByteArray()
+        }
+    }
+
+    private fun int32LE(value: Int): ByteArray = byteArrayOf(
+        (value and 0xFF).toByte(),
+        ((value ushr 8) and 0xFF).toByte(),
+        ((value ushr 16) and 0xFF).toByte(),
+        ((value ushr 24) and 0xFF).toByte(),
+    )
 }
 
 class RawFileScannerTest {

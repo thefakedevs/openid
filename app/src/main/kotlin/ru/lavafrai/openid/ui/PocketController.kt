@@ -212,7 +212,7 @@ class PocketController(
                             )
                         }
                         if (wasStarting) {
-                            pinPreferences.recoverPendingImport(summary?.accountId)
+                            pinPreferences.recoverPendingImport()
                             mutableState.update {
                                 it.copy(
                                     destination = if (summary == null) {

@@ -265,7 +265,7 @@ internal class MaxRootImportRepository(
             for (path in listing?.split('\u0000') ?: emptyList()) {
                 if (files >= MAX_FILES || totalBytes >= MAX_TOTAL_BYTES) break
                 if (!path.startsWith(directory)) continue
-                val raw = shell.binary("head -c ${MAX_FILE_BYTES + 1} $path", ignoreExitCode = true) ?: continue
+                val raw = shell.binary("head -c ${MAX_FILE_BYTES + 1} '$path'", ignoreExitCode = true) ?: continue
                 if (raw.size > MAX_FILE_BYTES) continue
                 files++
                 totalBytes += raw.size
@@ -308,7 +308,7 @@ internal class MaxRootImportRepository(
         var files = 0
         for (path in listing.split('\u0000')) {
             if (!path.contains("leveldb") || files >= MAX_FILES) continue
-            val raw = shell.binary("head -c ${MAX_FILE_BYTES + 1} $path", ignoreExitCode = true) ?: continue
+            val raw = shell.binary("head -c ${MAX_FILE_BYTES + 1} '$path'", ignoreExitCode = true) ?: continue
             if (raw.size > MAX_FILE_BYTES) continue
             files++
             val values = LocalStorageCodec.scan(raw, setOf(KEY_PIN_SALT, KEY_CREATION_TIMESTAMP))
@@ -335,7 +335,7 @@ internal class MaxRootImportRepository(
         for (path in listing.split('\n')) {
             if (files >= MAX_FILES) break
             if (!path.startsWith("/data/user/$user/${RootImportPackages.MAX}")) continue
-            val raw = shell.binary("head -c ${MAX_FILE_BYTES + 1} $path", ignoreExitCode = true) ?: continue
+            val raw = shell.binary("head -c ${MAX_FILE_BYTES + 1} '$path'", ignoreExitCode = true) ?: continue
             if (raw.size > MAX_FILE_BYTES) continue
             files++
             when {
@@ -380,7 +380,7 @@ internal class MaxRootImportRepository(
             .take(MAX_LOG_FILES)
         val found = linkedSetOf<String>()
         for (path in paths) {
-            val raw = shell.binary("head -c ${MAX_FILE_BYTES + 1} $path", ignoreExitCode = true) ?: continue
+            val raw = shell.binary("head -c ${MAX_FILE_BYTES + 1} '$path'", ignoreExitCode = true) ?: continue
             if (raw.size > MAX_FILE_BYTES) continue
             TokenScan.collect(raw, found)
             currentCoroutineContext().ensureActive()

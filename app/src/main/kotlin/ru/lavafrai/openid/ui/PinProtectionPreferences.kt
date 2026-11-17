@@ -2,6 +2,7 @@ package ru.lavafrai.openid.ui
 
 import android.content.Context
 import androidx.core.content.edit
+import java.util.UUID
 import ru.lavafrai.openid.models.pin.PinProtection
 
 /** Only the selected policy, the account ID and the profile kind; never the PIN or credentials. */
@@ -36,9 +37,9 @@ class PinProtectionPreferences(context: Context) {
 
     /**
      * Write-ahead phase: records the values a pending import intends to commit.
-     * The actual [save] happens only after the account repository confirms the write
-     * via [finalizeImport], so a crash or failure before that leaves the current
-     * preferences intact.
+     * A unique nonce ties [markImportCommitted] to this exact transaction so that
+     * [recoverPendingImport] can distinguish a committed write from a stale one
+     * even when the account id stays the same (same-user replacement).
      */
     fun prepareImport(
         accountId: Long,
@@ -49,17 +50,19 @@ class PinProtectionPreferences(context: Context) {
             putLong("txAccountId", accountId)
             putString("txProtection", protection.name)
             putBoolean("txTokenProfile", tokenProfile)
-            putBoolean("txCommitted", false)
+            putString("txNonce", UUID.randomUUID().toString())
+            remove("txCommittedNonce")
         }
     }
 
     /**
      * Called immediately after the account repository write succeeds, before any
-     * other side effects. Marks the pending transaction so [recoverPendingImport]
-     * can finalize it if the process dies before [finalizeImport].
+     * other side effects. Copies the transaction nonce into the committed slot so
+     * [recoverPendingImport] can verify this exact transaction was committed.
      */
     fun markImportCommitted() {
-        preferences.edit { putBoolean("txCommitted", true) }
+        val nonce = preferences.getString("txNonce", null) ?: return
+        preferences.edit { putString("txCommittedNonce", nonce) }
     }
 
     /**
@@ -78,28 +81,29 @@ class PinProtectionPreferences(context: Context) {
             remove("txAccountId")
             remove("txProtection")
             remove("txTokenProfile")
-            remove("txCommitted")
+            remove("txNonce")
+            remove("txCommittedNonce")
         }
     }
 
     /**
      * On startup, detects and resolves a half-finished import transaction.
-     * If the account write had already succeeded ([markImportCommitted] was called),
-     * the pending preferences are applied; otherwise they are discarded.
+     * Finalizes only when the committed nonce matches the transaction nonce,
+     * proving the account write succeeded for this specific transaction.
      */
-    fun recoverPendingImport(currentAccountId: Long? = null) {
+    fun recoverPendingImport() {
         if (!preferences.contains("txAccountId")) return
-        val txAccountId = preferences.getLong("txAccountId", -1)
-        if (preferences.getBoolean("txCommitted", false) ||
-            (currentAccountId != null && currentAccountId == txAccountId)
-        ) {
+        val nonce = preferences.getString("txNonce", null)
+        val committedNonce = preferences.getString("txCommittedNonce", null)
+        if (nonce != null && nonce == committedNonce) {
             finalizeImport()
         } else {
             preferences.edit {
                 remove("txAccountId")
                 remove("txProtection")
                 remove("txTokenProfile")
-                remove("txCommitted")
+                remove("txNonce")
+                remove("txCommittedNonce")
             }
         }
     }

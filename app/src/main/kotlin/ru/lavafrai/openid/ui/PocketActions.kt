@@ -10,6 +10,7 @@ import ru.lavafrai.openid.domain.usecases.GetSavedPinStateUseCase
 import ru.lavafrai.openid.domain.usecases.ImportAccountUseCase
 import ru.lavafrai.openid.domain.usecases.MigrateAccountStorageUseCase
 import ru.lavafrai.openid.domain.usecases.ReplaceAccountUseCase
+import ru.lavafrai.openid.domain.usecases.ReturnToAppUseCase
 import ru.lavafrai.openid.domain.usecases.SavePinUseCase
 
 class PocketActions(
@@ -24,5 +25,6 @@ class PocketActions(
     val deleteAccount: DeleteAccountUseCase,
     val extractMaxAccount: ExtractMaxAccountUseCase,
     val checkRootEnvironment: CheckRootEnvironmentUseCase,
+    val returnToApp: ReturnToAppUseCase,
     val runDfRoot: suspend (suManager: String, report: (String) -> Unit) -> Unit,
 )

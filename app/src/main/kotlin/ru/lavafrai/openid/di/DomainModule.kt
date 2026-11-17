@@ -13,6 +13,7 @@ import ru.lavafrai.openid.domain.usecases.GetSavedPinStateUseCase
 import ru.lavafrai.openid.domain.usecases.ImportAccountUseCase
 import ru.lavafrai.openid.domain.usecases.MigrateAccountStorageUseCase
 import ru.lavafrai.openid.domain.usecases.ReplaceAccountUseCase
+import ru.lavafrai.openid.domain.usecases.ReturnToAppUseCase
 import ru.lavafrai.openid.domain.usecases.SavePinUseCase
 import ru.lavafrai.openid.domain.usecases.UnlockAccountUseCase
 import ru.lavafrai.openid.domain.usecases.UnlockPinUseCase
@@ -35,4 +36,5 @@ val domainModule = module {
     factory { GenerateQrUseCase(get(), get(), get(), get(), get(), get(), get(), get()) }
     factory { ExtractMaxAccountUseCase(get()) }
     factory { CheckRootEnvironmentUseCase(get()) }
+    factory { ReturnToAppUseCase(get()) }
 }

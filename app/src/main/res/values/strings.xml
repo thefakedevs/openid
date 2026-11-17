@@ -20,7 +20,10 @@
     <string name="method_description">Выберите, как добавить профиль Digital ID.</string>
     <string name="method_auto_label">Автоматически</string>
     <string name="method_auto_description">Приложение само вытянет авторизацию из MAX на этом телефоне. Нужен root или DFRoot.</string>
-    <string name="root_source_instruction">После нажатия «Продолжить» приложение само откроет MAX. Откройте там Цифровой ID и разблокируйте его — затем просто вернитесь в OpenID, перенос данных завершится автоматически.</string>
+    <string name="root_source_instruction">После нажатия «Продолжить» приложение само откроет MAX. Откройте там Цифровой ID и разблокируйте его — как только данные будут получены, приложение вернёт вас обратно.</string>
+    <string name="root_confirm_title">Сейчас откроется MAX</string>
+    <string name="root_confirm_message">1. Приложение откроет MAX.\n2. В MAX откройте раздел «Цифровой ID» и разблокируйте его.\n3. Подождите: как только данные будут получены, OpenID вернётся на экран сам. Если этого не произошло, вернитесь в OpenID вручную.</string>
+    <string name="root_confirm_accept">Всё понятно, открыть MAX</string>
     <string name="root_import_switch_toast">Откройте в MAX Цифровой ID и разблокируйте его, затем вернитесь в OpenID</string>
     <string name="root_import_done_toast">Данные получены. Можно вернуться в OpenID</string>
     <string name="method_manual_label">Вручную</string>

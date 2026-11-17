@@ -37,4 +37,11 @@ interface RootImportRepository {
      * stays in memory only. DataException reports failure causes as stable diagnostic codes.
      */
     suspend fun extract(onStage: (RootImportStage) -> Unit = {}): ImportedAccount
+
+    /**
+     * Brings this application back to the foreground after the user was sent to MAX. Best effort:
+     * a backgrounded app may not start its own activity, so it is launched as root, like the
+     * launcher would. Does nothing without root; never throws.
+     */
+    suspend fun returnToApp()
 }

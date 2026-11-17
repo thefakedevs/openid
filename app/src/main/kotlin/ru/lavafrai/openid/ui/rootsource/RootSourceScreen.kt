@@ -12,13 +12,19 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -56,6 +62,25 @@ fun RootSourceScreen(
 ) {
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { onRefreshCheck() }
     val context = LocalContext.current
+    var confirming by rememberSaveable { mutableStateOf(false) }
+    if (confirming) {
+        AlertDialog(
+            onDismissRequest = { confirming = false },
+            title = { Text(stringResource(R.string.root_confirm_title)) },
+            text = { Text(stringResource(R.string.root_confirm_message)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirming = false
+                        onNext()
+                    },
+                ) { Text(stringResource(R.string.root_confirm_accept)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirming = false }) { Text(stringResource(R.string.action_cancel)) }
+            },
+        )
+    }
     Column(verticalArrangement = Arrangement.spacedBy(28.dp)) {
         ScreenHeading(
             stringResource(R.string.root_source_title),
@@ -103,7 +128,7 @@ fun RootSourceScreen(
         }
         PrimaryButton(
             stringResource(R.string.action_continue),
-            onNext,
+            { confirming = true },
             enabled = !busy && selected != null && check == RootCheckState.AVAILABLE && maxInstalled,
         )
     }

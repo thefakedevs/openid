@@ -355,8 +355,8 @@ class PocketController(
         // Survives backgrounding but not disposal: the frida capture waits for the user to open Digital ID in MAX, which
         // backgrounds this app; the operation must survive that round trip.
         runOperation(ErrorOperation.ROOT_IMPORT, ErrorRecovery.ROOT_IMPORT, survivesBackground = true) {
+            var switchedToMax = false
             try {
-                var switchedToMax = false
                 val account = actions.extractMaxAccount { stage ->
                     mutableState.update { it.copy(rootStage = stage) }
                     if (stage == RootImportStage.READING_DIGITAL_ID && !switchedToMax) {
@@ -364,6 +364,9 @@ class PocketController(
                         switchToMaxDigitalId()
                     }
                 }
+                currentCoroutineContext().ensureActive()
+                // The data is in hand: bring the app back from MAX instead of waiting for the user.
+                if (switchedToMax) runCatching { actions.returnToApp() }
                 currentCoroutineContext().ensureActive()
                 imports.hold(account)
                 showToast(R.string.root_import_done_toast)
@@ -385,6 +388,8 @@ class PocketController(
             } catch (failure: Exception) {
                 if (failure is CancellationException) throw failure
                 mutableState.update { it.copy(rootStage = null) }
+                // The user is still in MAX; show the error where they can read it.
+                if (switchedToMax) runCatching { actions.returnToApp() }
                 throw failure
             }
         }

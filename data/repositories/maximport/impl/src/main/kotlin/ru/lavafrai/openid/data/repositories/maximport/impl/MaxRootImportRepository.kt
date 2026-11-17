@@ -72,6 +72,20 @@ internal class MaxRootImportRepository(
         }.distinct()
     }
 
+    override suspend fun returnToApp() {
+        val component = context.packageManager.getLaunchIntentForPackage(context.packageName)
+            ?.component
+            ?.flattenToShortString()
+            ?.takeIf { APP_COMPONENT.matches(it) }
+            ?: return
+        // Same intent the launcher sends, so the existing task is resumed instead of a second
+        // activity (and a second ViewModel) being created on top of it.
+        shell.text(
+            "am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -n $component",
+            ignoreExitCode = true,
+        )
+    }
+
     override suspend fun extract(onStage: (RootImportStage) -> Unit): ImportedAccount = coroutineScope {
         trace.clear()
         val injector = FridaInjector(context, shell, trace)
@@ -505,6 +519,7 @@ internal class MaxRootImportRepository(
         const val KEY_PIN_SALT = "pin_salt::digitalId"
         const val KEY_CREATION_TIMESTAMP = "creation_timestamp::digitalId"
         private const val MAX_LEVELDB_DIRECTORIES = 4
+        private val APP_COMPONENT = Regex("[A-Za-z0-9_.]+/[A-Za-z0-9_.]+")
         private val LOCAL_STORAGE_KEYS = setOf(KEY_PIN_SALT, KEY_CREATION_TIMESTAMP)
         const val BIOMETRY_FRAGMENT = "biomet"
         const val KSUD_LIBRARY = "libksud.so"

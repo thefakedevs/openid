@@ -23,8 +23,8 @@ internal object LocalStorageCodec {
         0x8b.toByte(),
         0x24,
         0x75,
-        0x74,
-        0x68,
+        0x47,
+        0xdb.toByte(),
     )
 
     fun scan(

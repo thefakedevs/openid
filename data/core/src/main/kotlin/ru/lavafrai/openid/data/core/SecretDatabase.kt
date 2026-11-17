@@ -31,7 +31,20 @@ data class SecretRecord(
      * flipped without failing decryption.
      */
     @ColumnInfo(defaultValue = "0") val tokenProfile: Boolean = false,
-)
+    /**
+     * Version of the authenticated-data format the row was encrypted with (see
+     * [VaultCipher.associatedData]). Rows written by schema 1 keep [CRYPTO_V1] after
+     * [SecretDatabase.MIGRATION_1_2]: their ciphertext and wrapped key stay bound to the v1 AAD,
+     * so they must be opened with it and are re-encrypted to [CRYPTO_CURRENT] on next unlock.
+     */
+    @ColumnInfo(defaultValue = "1") val cryptoVersion: Int = CRYPTO_CURRENT,
+) {
+    companion object {
+        const val CRYPTO_V1 = 1
+        const val CRYPTO_V2 = 2
+        const val CRYPTO_CURRENT = CRYPTO_V2
+    }
+}
 
 @Dao
 interface SecretDao {
@@ -53,10 +66,15 @@ abstract class SecretDatabase : RoomDatabase() {
     abstract fun secrets(): SecretDao
 
     companion object {
-        /** Adds the [SecretRecord.tokenProfile] column, defaulting existing rows to a non-token profile. */
+        /**
+         * Adds [SecretRecord.tokenProfile] (existing rows are non-token profiles: schema 1 required a
+         * PIN salt) and [SecretRecord.cryptoVersion] = 1, so existing ciphertext keeps opening with
+         * the v1 authenticated data it was sealed with.
+         */
         val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE secrets ADD COLUMN tokenProfile INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE secrets ADD COLUMN cryptoVersion INTEGER NOT NULL DEFAULT 1")
             }
         }
     }

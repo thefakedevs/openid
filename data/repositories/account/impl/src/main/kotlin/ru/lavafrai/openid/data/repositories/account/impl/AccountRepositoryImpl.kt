@@ -159,7 +159,16 @@ class AccountRepositoryImpl(private val storage: SecretStorage) : AccountReposit
         try {
             val account = AccountCodec.decode(StrictJson.parse(secret.raw))
             requireData(account.accountId == row.accountId, "STORAGE_METADATA_MISMATCH")
+            requireData(account.did.tokenProfile == row.tokenProfile, "STORAGE_METADATA_MISMATCH")
             secret.raw.fill(0)
+            if (row.cryptoVersion < SecretRecord.CRYPTO_CURRENT) {
+                // Row sealed with an older AAD format (pre-migration). Re-encrypt it under the current
+                // format with a fresh key, then unlock the upgraded row.
+                secret.close()
+                handedOff = true
+                write(account, row)
+                return unlock()
+            }
             currentCoroutineContext().ensureActive()
             return synchronized(stateLock) {
                 requireData(record?.alias == row.alias, "ACCOUNT_CHANGED")

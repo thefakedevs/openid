@@ -1,10 +1,18 @@
 package ru.lavafrai.openid.data.repositories.maximport.impl
 
+import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import org.iq80.leveldb.CompressionType
+import org.iq80.leveldb.Options
+import org.iq80.leveldb.impl.Iq80DBFactory
 
 class LocalStorageCodecTest {
+    private companion object {
+        const val TABLE_MAGIC_NUMBER = -0x24b88adb747f04a9L // 0xdb4775248b80fb57
+    }
+
     private val originPrefix: ByteArray =
         byteArrayOf(0x5F) + "https://digital-id.max.ru".toByteArray(Charsets.US_ASCII) + byteArrayOf(0x00, 0x01)
 
@@ -101,6 +109,36 @@ class LocalStorageCodecTest {
     fun `sstable newer delete suppresses older put`() {
         val raw = buildSsTablePutThenDelete("pin_salt::digitalId", "stale-salt")
         assertTrue(LocalStorageCodec.scan(raw, setOf("pin_salt::digitalId")).isEmpty())
+    }
+
+    @Test
+    fun `sstable footer magic matches the leveldb format`() {
+        val footer = buildSsTable("pin_salt::digitalId" to "x").takeLast(8).map { it.toInt() and 0xFF }
+        assertEquals(listOf(0x57, 0xfb, 0x80, 0x8b, 0x24, 0x75, 0x47, 0xdb), footer)
+    }
+
+    @Test
+    fun `reads a real sstable written by leveldb`() {
+        val dir = Files.createTempDirectory("leveldb-sst").toFile()
+        try {
+            val key = originPrefix + "pin_salt::digitalId".toByteArray(Charsets.US_ASCII)
+            val value = byteArrayOf(0x01) + "real-salt".toByteArray(Charsets.ISO_8859_1)
+            val options = Options().createIfMissing(true).compressionType(CompressionType.NONE)
+            Iq80DBFactory.factory.open(dir, options).use { db -> db.put(key, value) }
+            // Reopening replays the log into a level-0 table file, so the entry ends up in a real
+            // SSTable rather than only in the write-ahead log.
+            Iq80DBFactory.factory.open(dir, options).close()
+            val tables = dir.listFiles { file -> file.name.endsWith(".sst") || file.name.endsWith(".ldb") }
+                .orEmpty()
+                .filter { it.length() > 0 }
+            assertTrue(tables.isNotEmpty(), "leveldb did not produce a table file")
+            val values = tables
+                .map { LocalStorageCodec.scan(it.readBytes(), setOf("pin_salt::digitalId")) }
+                .firstOrNull { it.isNotEmpty() }
+            assertEquals("real-salt", values?.get("pin_salt::digitalId"))
+        } finally {
+            dir.deleteRecursively()
+        }
     }
 
     /** Builds a minimal SSTable with uncompressed data/index blocks and a valid footer. */
@@ -208,7 +246,9 @@ class LocalStorageCodecTest {
     ): ByteArray {
         val handles = varint64(metaOffset) + varint64(metaSize) + varint64(indexOffset) + varint64(indexSize)
         val padding = ByteArray(40 - handles.size)
-        val magic = byteArrayOf(0x57, 0xfb.toByte(), 0x80.toByte(), 0x8b.toByte(), 0x24, 0x75, 0x74, 0x68)
+        // kTableMagicNumber from leveldb/doc/table_format.md, stored little-endian; spelled out
+        // independently of the implementation's constant so a wrong constant cannot pass the tests.
+        val magic = ByteArray(8) { i -> ((TABLE_MAGIC_NUMBER ushr (i * 8)) and 0xFF).toByte() }
         return handles + padding + magic
     }
 

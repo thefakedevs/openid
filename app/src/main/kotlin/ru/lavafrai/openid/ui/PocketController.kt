@@ -212,7 +212,6 @@ class PocketController(
                             )
                         }
                         if (wasStarting) {
-                            pinPreferences.recoverPendingImport()
                             mutableState.update {
                                 it.copy(
                                     destination = if (summary == null) {
@@ -221,7 +220,7 @@ class PocketController(
                                         PocketDestination.UNLOCK
                                     },
                                     unlockPinProtection = effectivePinProtection(),
-                                    tokenProfile = summary != null && pinPreferences.isTokenProfile(summary.accountId),
+                                    tokenProfile = summary?.tokenProfile == true,
                                     tokenLockConfigured = summary != null && tokenLock.isConfigured(summary.accountId),
                                     tokenLockBiometricAvailable = summary != null &&
                                         tokenLock.biometricEnabled(summary.accountId) &&
@@ -436,7 +435,7 @@ class PocketController(
         val imported = imports.prepared ?: return
         runOperation(ErrorOperation.IMPORT, ErrorRecovery.IMPORT, durable = true) {
             replacementSettings = null
-            finishCommit(imported, current.importMode, current.pinProtection, imported.did.tokenProfile)
+            finishCommit(imported, current.importMode, current.pinProtection)
         }
     }
 
@@ -449,17 +448,17 @@ class PocketController(
         imported: ImportedAccount,
         mode: ImportMode,
         pinProtection: PinProtection,
-        tokenProfile: Boolean,
     ) {
         qrSession.stopAndWait()
-        // Write-ahead: record the intended preferences so recoverPendingImport() can
-        // finalize them if the process dies after the account write but before
-        // finalizeImport(). The current preferences stay untouched until success.
-        pinPreferences.prepareImport(imported.accountId, pinProtection, tokenProfile)
+        // imports.commit writes the account atomically, and its token-profile kind travels inside
+        // that record (AccountSummary.tokenProfile). There is no separate metadata to keep in sync,
+        // so a crash on either side of this call leaves a self-consistent state: either the old
+        // account with its old protection, or the new account with its own kind. The previous
+        // token lock is reset only AFTER the commit succeeds, so a failed replacement keeps the
+        // prior account's lock enforced instead of opening its QR with any PIN.
         val summary = imports.commit(imported, mode)
-        pinPreferences.markImportCommitted()
         tokenLock.clear()
-        pinPreferences.finalizeImport()
+        pinPreferences.save(imported.accountId, pinProtection)
         currentCoroutineContext().ensureActive()
         attempts.reset()
         imports.clear()
@@ -468,7 +467,7 @@ class PocketController(
                 destination = PocketDestination.UNLOCK,
                 account = summary,
                 accountMigrationRequired = false,
-                tokenProfile = tokenProfile,
+                tokenProfile = summary.tokenProfile,
                 unlockPinProtection = pinProtection,
                 tokenLockConfigured = false,
                 tokenLockBiometricAvailable = false,
@@ -837,7 +836,7 @@ class PocketController(
                         importMethod = null,
                         importForm = ImportForm(),
                         unlockPinProtection = effectivePinProtection(),
-                        tokenProfile = accountId != null && pinPreferences.isTokenProfile(accountId),
+                        tokenProfile = it.account?.tokenProfile == true,
                         tokenLockConfigured = accountId != null && tokenLock.isConfigured(accountId),
                         tokenLockBiometricAvailable = accountId != null &&
                             tokenLock.biometricEnabled(accountId) &&
@@ -905,7 +904,7 @@ class PocketController(
                 rootSource = null,
                 rootCheck = RootCheckState.IDLE,
                 rootStage = null,
-                tokenProfile = accountId != null && pinPreferences.isTokenProfile(accountId),
+                tokenProfile = it.account?.tokenProfile == true,
                 tokenLockConfigured = accountId != null && tokenLock.isConfigured(accountId),
                 tokenLockBiometricAvailable = accountId != null &&
                     tokenLock.biometricEnabled(accountId) &&

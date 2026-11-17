@@ -27,6 +27,6 @@ class ReplaceAccountUseCase(
         val previous = checkNotNull(accounts.getSummary()) { "No account to replace" }
         pins.delete(previous.accountId)
         accounts.replace(account)
-        AccountSummary(account.accountId)
+        AccountSummary(account.accountId, account.did.tokenProfile)
     }
 }

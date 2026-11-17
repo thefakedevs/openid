@@ -8,7 +8,11 @@ import ru.lavafrai.openid.data.core.SecretStorage
 import ru.lavafrai.openid.data.core.VaultCipher
 
 val dataCoreModule = module {
-    single { Room.databaseBuilder(androidContext(), SecretDatabase::class.java, "pocket-secrets.db").build() }
+    single {
+        Room.databaseBuilder(androidContext(), SecretDatabase::class.java, "pocket-secrets.db")
+            .addMigrations(SecretDatabase.MIGRATION_1_2)
+            .build()
+    }
     single { VaultCipher(androidContext()) }
     single { SecretStorage(get<SecretDatabase>().secrets(), get()) }
 }

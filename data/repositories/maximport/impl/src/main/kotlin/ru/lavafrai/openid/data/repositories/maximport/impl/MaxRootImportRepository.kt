@@ -255,7 +255,11 @@ internal class MaxRootImportRepository(
         var totalBytes = 0L
         for ((subdirectory, pattern) in PREFERENCE_DIRECTORIES) {
             val directory = "$dataRoot/$subdirectory"
-            // No quotes, redirections or && here: app-issued su commands run without a shell.
+            // su -M -c hands the command string to a shell (see RootShell), so operands follow
+            // shell word-splitting. These operands are built only from constants ($directory and
+            // $pattern below contain no spaces or metacharacters), so they need no quoting; a
+            // captured file path, which may contain spaces (e.g. "Local Storage"), is always
+            // wrapped with shellArg() before interpolation so it stays a single argument.
             val listing = shell.text(
                 "find $directory -maxdepth 1 -type f -name $pattern -print0",
                 ignoreExitCode = true,
@@ -265,7 +269,8 @@ internal class MaxRootImportRepository(
             for (path in listing?.split('\u0000') ?: emptyList()) {
                 if (files >= MAX_FILES || totalBytes >= MAX_TOTAL_BYTES) break
                 if (!path.startsWith(directory)) continue
-                val raw = shell.binary("head -c ${MAX_FILE_BYTES + 1} '$path'", ignoreExitCode = true) ?: continue
+                val raw =
+                    shell.binary("head -c ${MAX_FILE_BYTES + 1} ${shellArg(path)}", ignoreExitCode = true) ?: continue
                 if (raw.size > MAX_FILE_BYTES) continue
                 files++
                 totalBytes += raw.size
@@ -308,7 +313,7 @@ internal class MaxRootImportRepository(
         var files = 0
         for (path in listing.split('\u0000')) {
             if (!path.contains("leveldb") || files >= MAX_FILES) continue
-            val raw = shell.binary("head -c ${MAX_FILE_BYTES + 1} '$path'", ignoreExitCode = true) ?: continue
+            val raw = shell.binary("head -c ${MAX_FILE_BYTES + 1} ${shellArg(path)}", ignoreExitCode = true) ?: continue
             if (raw.size > MAX_FILE_BYTES) continue
             files++
             val values = LocalStorageCodec.scan(raw, setOf(KEY_PIN_SALT, KEY_CREATION_TIMESTAMP))
@@ -335,7 +340,7 @@ internal class MaxRootImportRepository(
         for (path in listing.split('\n')) {
             if (files >= MAX_FILES) break
             if (!path.startsWith("/data/user/$user/${RootImportPackages.MAX}")) continue
-            val raw = shell.binary("head -c ${MAX_FILE_BYTES + 1} '$path'", ignoreExitCode = true) ?: continue
+            val raw = shell.binary("head -c ${MAX_FILE_BYTES + 1} ${shellArg(path)}", ignoreExitCode = true) ?: continue
             if (raw.size > MAX_FILE_BYTES) continue
             files++
             when {
@@ -380,7 +385,7 @@ internal class MaxRootImportRepository(
             .take(MAX_LOG_FILES)
         val found = linkedSetOf<String>()
         for (path in paths) {
-            val raw = shell.binary("head -c ${MAX_FILE_BYTES + 1} '$path'", ignoreExitCode = true) ?: continue
+            val raw = shell.binary("head -c ${MAX_FILE_BYTES + 1} ${shellArg(path)}", ignoreExitCode = true) ?: continue
             if (raw.size > MAX_FILE_BYTES) continue
             TokenScan.collect(raw, found)
             currentCoroutineContext().ensureActive()
@@ -427,6 +432,15 @@ internal class MaxRootImportRepository(
         val accountId: Long,
         val accessToken: String,
     )
+
+    /**
+     * Wraps a captured file path as a single POSIX shell word so a space (e.g. "Local Storage")
+     * cannot split it into several arguments once su passes the command to a shell. Embedded single
+     * quotes are escaped the standard way ('"'"' → close, literal quote, reopen) rather than left to
+     * break the quoting; app-private WebView paths never contain one, but the escaping keeps the
+     * command well-formed regardless of the bytes find returns.
+     */
+    private fun shellArg(path: String): String = "'" + path.replace("'", "'\\''") + "'"
 
     private companion object {
         const val KEY_ACCESS_TOKEN = "auth.token"

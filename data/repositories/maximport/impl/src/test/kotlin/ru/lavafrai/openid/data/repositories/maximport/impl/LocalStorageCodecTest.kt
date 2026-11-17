@@ -97,6 +97,12 @@ class LocalStorageCodecTest {
         assertTrue(LocalStorageCodec.scan(raw, setOf("pin_salt::digitalId")).isEmpty())
     }
 
+    @Test
+    fun `sstable newer delete suppresses older put`() {
+        val raw = buildSsTablePutThenDelete("pin_salt::digitalId", "stale-salt")
+        assertTrue(LocalStorageCodec.scan(raw, setOf("pin_salt::digitalId")).isEmpty())
+    }
+
     /** Builds a minimal SSTable with uncompressed data/index blocks and a valid footer. */
     private fun buildSsTable(vararg entries: Pair<String, String>): ByteArray {
         val sorted = entries.sortedBy { it.first }
@@ -134,6 +140,32 @@ class LocalStorageCodecTest {
         val dataBlockOffset = 0
         val dataBlockSize = dataBlock.size
         val separatorKey = userKey + packSequenceType(1L, 0)
+        val indexBlock = buildDataBlock(
+            listOf(
+                separatorKey to (varint64(dataBlockOffset.toLong()) + varint64(dataBlockSize.toLong())),
+            ),
+        )
+        val indexBlockOffset = dataBlockSize + 5
+        val indexBlockSize = indexBlock.size
+        val footer = buildFooter(0, 0, indexBlockOffset.toLong(), indexBlockSize.toLong())
+        return dataBlock + byteArrayOf(0x00, 0, 0, 0, 0) +
+            indexBlock + byteArrayOf(0x00, 0, 0, 0, 0) +
+            footer
+    }
+
+    /** Same user key twice, newest first: a deletion at seq 2 ahead of the older put at seq 1. */
+    private fun buildSsTablePutThenDelete(
+        key: String,
+        value: String,
+    ): ByteArray {
+        val userKey = originPrefix + key.toByteArray(Charsets.US_ASCII)
+        val deleteKey = userKey + packSequenceType(2L, 0)
+        val putKey = userKey + packSequenceType(1L, 1)
+        val putPayload = byteArrayOf(0x01) + value.toByteArray(Charsets.ISO_8859_1)
+        val dataBlock = buildDataBlock(listOf(deleteKey to ByteArray(0), putKey to putPayload))
+        val dataBlockOffset = 0
+        val dataBlockSize = dataBlock.size
+        val separatorKey = userKey + packSequenceType(2L, 0)
         val indexBlock = buildDataBlock(
             listOf(
                 separatorKey to (varint64(dataBlockOffset.toLong()) + varint64(dataBlockSize.toLong())),

@@ -34,8 +34,11 @@ internal object LocalStorageCodec {
     ): Map<String, String> {
         val originPrefix = byteArrayOf(0x5F) + origin.toByteArray(Charsets.US_ASCII) + byteArrayOf(0x00, 0x01)
         val found = mutableMapOf<String, String>()
-        if (isSsTable(raw)) scanSsTable(raw, originPrefix, keys, found)
-        scanLog(raw, originPrefix, keys, found)
+        // An SSTable file and a WAL/log file are distinct, self-contained formats. An SSTable
+        // resolves each key authoritatively (to a value or to a tombstone), so the raw log scan
+        // must NOT also run over it: doing so would let the byte-level search resurrect a key the
+        // table marked deleted. Only a file without an SSTable footer is treated as a WAL log.
+        if (isSsTable(raw)) scanSsTable(raw, originPrefix, keys, found) else scanLog(raw, originPrefix, keys, found)
         return found
     }
 
@@ -128,6 +131,12 @@ internal object LocalStorageCodec {
             dataBlocks += off to sz
         }
 
+        // Within an SSTable, entries are ordered by user key ascending and, for equal user keys,
+        // by sequence number descending (newest first). The first entry seen for a user key is
+        // therefore the current one: if it is a deletion (type 0) the key is gone and no older Put
+        // may be returned; if it is a Put (type 1) its value wins. `resolved` locks that decision
+        // on first sighting so a later, older record for the same key cannot override it.
+        val resolved = mutableSetOf<String>()
         for ((blockOff, blockSz) in dataBlocks) {
             val off = blockOff.toInt()
             val sz = blockSz.toInt()
@@ -136,11 +145,12 @@ internal object LocalStorageCodec {
             parseBlock(block) { key, value ->
                 if (key.size < 8) return@parseBlock
                 val typeTag = key[key.size - 8].toInt() and 0xFF
-                if (typeTag != 1) return@parseBlock
                 val userKeyLen = key.size - 8
                 for ((name, pattern) in targetPatterns) {
-                    if (name !in found && userKeyLen == pattern.size && prefixMatches(key, pattern)) {
-                        decodePayload(value, 0, value.size)?.let { found[name] = it }
+                    if (name in resolved || name in found) continue
+                    if (userKeyLen == pattern.size && prefixMatches(key, pattern)) {
+                        resolved += name
+                        if (typeTag == 1) decodePayload(value, 0, value.size)?.let { found[name] = it }
                     }
                 }
             }

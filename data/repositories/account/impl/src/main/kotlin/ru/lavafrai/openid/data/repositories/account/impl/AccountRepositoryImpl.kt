@@ -82,7 +82,7 @@ class AccountRepositoryImpl(private val storage: SecretStorage) : AccountReposit
         requireData(state.value !is AccountState.Unavailable, "STORAGE_UNAVAILABLE")
     }
 
-    private fun summary(row: SecretRecord) = AccountSummary(row.accountId)
+    private fun summary(row: SecretRecord) = AccountSummary(row.accountId, row.tokenProfile)
 
     private fun publishState() {
         state.value = record?.let {
@@ -128,6 +128,7 @@ class AccountRepositoryImpl(private val storage: SecretStorage) : AccountReposit
                 VaultProtection.DEVICE,
                 raw,
                 null,
+                tokenProfile = account.did.tokenProfile,
             )
             storage.commit(
                 next,

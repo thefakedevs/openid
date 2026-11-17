@@ -33,7 +33,8 @@ class VaultCipher(private val context: Context) {
     private val keystore: KeyStore get() = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
 
     private fun associatedData(record: SecretRecord) =
-        "pocket-v1|${record.slot}|${record.accountId}|${record.protection}|${record.alias}".toByteArray(Charsets.UTF_8)
+        "pocket-v2|${record.slot}|${record.accountId}|${record.protection}|${record.alias}|${record.tokenProfile}"
+            .toByteArray(Charsets.UTF_8)
 
     suspend fun create(
         slot: String,
@@ -42,6 +43,7 @@ class VaultCipher(private val context: Context) {
         protectionMode: VaultProtection,
         raw: ByteArray,
         authenticator: CryptoAuthenticator?,
+        tokenProfile: Boolean = false,
     ): SecretRecord {
         requireData(
             (slot == "account" && protection == "DEVICE_KEY" && protectionMode == VaultProtection.DEVICE) ||
@@ -85,6 +87,7 @@ class VaultCipher(private val context: Context) {
                 wrappingIv = cipher.iv,
                 ciphertext = byteArrayOf(),
                 iv = byteArrayOf(),
+                tokenProfile = tokenProfile,
             )
             val record = withContext(Dispatchers.Default) {
                 cipher.updateAAD(associatedData(metadata))

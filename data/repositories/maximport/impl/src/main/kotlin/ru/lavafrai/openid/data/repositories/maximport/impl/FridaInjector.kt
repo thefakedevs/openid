@@ -148,7 +148,7 @@ internal class FridaInjector(
         val deadline = System.currentTimeMillis() + waitMillis
         var injectorDone = false
         while (System.currentTimeMillis() < deadline) {
-            delay(800)
+            delay(RESULT_POLL_MILLIS)
             val raw = shell.text("cat $result", ignoreExitCode = true)
             if (!raw.isNullOrEmpty()) {
                 val parsed = parse(raw)
@@ -215,5 +215,9 @@ internal class FridaInjector(
         // MAX is brought to the foreground. The binary is decompressed ahead of time, so attaching
         // is quick; this only covers process attach plus script load.
         const val AGENT_ARM_MILLIS = 6_000L
+
+        // How often the agent's result file is polled once MAX is in the foreground. Kept short so a
+        // successful capture is noticed quickly and the user is returned without extra idle waiting.
+        const val RESULT_POLL_MILLIS = 500L
     }
 }

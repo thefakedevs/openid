@@ -359,9 +359,17 @@ class PocketController(
             try {
                 val account = actions.extractMaxAccount { stage ->
                     mutableState.update { it.copy(rootStage = stage) }
-                    if (stage == RootImportStage.READING_DIGITAL_ID && !switchedToMax) {
-                        switchedToMax = true
-                        switchToMaxDigitalId()
+                    when (stage) {
+                        // Each capture pass re-enters this stage after the app has been brought back
+                        // to the foreground, so the guard is reset to allow a fresh switch to MAX.
+                        RootImportStage.PREPARING_DIGITAL_ID -> switchedToMax = false
+
+                        RootImportStage.READING_DIGITAL_ID -> if (!switchedToMax) {
+                            switchedToMax = true
+                            switchToMaxDigitalId()
+                        }
+
+                        else -> Unit
                     }
                 }
                 currentCoroutineContext().ensureActive()
@@ -369,7 +377,6 @@ class PocketController(
                 if (switchedToMax) runCatching { actions.returnToApp() }
                 currentCoroutineContext().ensureActive()
                 imports.hold(account)
-                showToast(R.string.root_import_done_toast)
                 // A captured-token profile has no Digital ID PIN to protect it (GenerateQrUseCase
                 // authorizes it with the bare token, bypassing PIN checks entirely), so without a
                 // deliberate local lock, opening its QR would need no confirmation at all once the

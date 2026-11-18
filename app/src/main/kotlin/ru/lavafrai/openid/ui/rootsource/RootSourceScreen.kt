@@ -1,7 +1,10 @@
 package ru.lavafrai.openid.ui.rootsource
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.net.Uri
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -11,7 +14,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -33,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.composables.icons.materialsymbols.rounded.R as Symbols
+import java.io.File
 import ru.lavafrai.openid.R
 import ru.lavafrai.openid.data.repositories.maximport.api.RootImportPackages
 import ru.lavafrai.openid.navigation.RootSource
@@ -40,8 +46,8 @@ import ru.lavafrai.openid.ui.RootCheckState
 import ru.lavafrai.openid.ui.components.ChoiceCard
 import ru.lavafrai.openid.ui.components.InfoCard
 import ru.lavafrai.openid.ui.components.PocketIcon
+import ru.lavafrai.openid.ui.components.PocketPassHeader
 import ru.lavafrai.openid.ui.components.PrimaryButton
-import ru.lavafrai.openid.ui.components.ScreenHeading
 
 /**
  * The second automatic-import step: root is either already confirmed by a manager or obtained
@@ -81,10 +87,12 @@ fun RootSourceScreen(
             },
         )
     }
-    Column(verticalArrangement = Arrangement.spacedBy(28.dp)) {
-        ScreenHeading(
-            stringResource(R.string.root_source_title),
+    Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
+        PocketPassHeader(title = stringResource(R.string.root_source_title))
+        Text(
             stringResource(R.string.root_source_description),
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Column(Modifier.selectableGroup(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             ChoiceCard(
@@ -131,8 +139,68 @@ fun RootSourceScreen(
             { confirming = true },
             enabled = !busy && selected != null && check == RootCheckState.AVAILABLE && maxInstalled,
         )
+        // Debug builds only: the extraction trace is kept there for diagnosing a flaky import.
+        val debuggable = (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        if (debuggable) DebugLogButton()
     }
 }
+
+/**
+ * Debug-only viewer for the extraction trace ([RootImportPackages.TRACE_LOG_FILE]). The trace is no
+ * longer wiped on success in debug builds, so a failed or slow import can be inspected and copied
+ * here without a USB cable.
+ */
+@Composable
+private fun DebugLogButton() {
+    val context = LocalContext.current
+    var log by rememberSaveable { mutableStateOf<String?>(null) }
+    log?.let { contents ->
+        AlertDialog(
+            onDismissRequest = { log = null },
+            title = { Text(stringResource(R.string.root_debug_log_title)) },
+            text = {
+                val scroll = rememberScrollState()
+                Text(
+                    contents.ifBlank { stringResource(R.string.root_debug_log_empty) },
+                    modifier = Modifier.heightIn(max = 420.dp).verticalScroll(scroll),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { copyToClipboard(context, contents) },
+                    enabled = contents.isNotBlank(),
+                ) { Text(stringResource(R.string.action_copy)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { log = null }) { Text(stringResource(R.string.action_close)) }
+            },
+        )
+    }
+    TextButton(
+        onClick = { log = readTrace(context) },
+        modifier = Modifier.fillMaxWidth(),
+    ) { Text(stringResource(R.string.root_debug_log)) }
+}
+
+private fun readTrace(context: Context): String {
+    val file = File(context.cacheDir, RootImportPackages.TRACE_LOG_FILE)
+    return runCatching {
+        if (!file.exists()) "" else file.readText().takeLast(MAX_TRACE_CHARS)
+    }.getOrDefault("")
+}
+
+private fun copyToClipboard(
+    context: Context,
+    text: String,
+) {
+    runCatching {
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("maximport trace", text))
+    }
+}
+
+private const val MAX_TRACE_CHARS = 20_000
 
 @Composable
 private fun dfRootDescription(

@@ -1,33 +1,24 @@
 package ru.lavafrai.openid.ui.importing
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.heading
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -37,6 +28,7 @@ import com.composables.icons.materialsymbols.rounded.R as Symbols
 import ru.lavafrai.openid.R
 import ru.lavafrai.openid.ui.ImportForm
 import ru.lavafrai.openid.ui.components.PocketIcon
+import ru.lavafrai.openid.ui.components.PocketPassHeader
 import ru.lavafrai.openid.ui.components.PrimaryButton
 import ru.lavafrai.openid.ui.components.ScreenHeading
 
@@ -57,7 +49,7 @@ fun ImportScreen(
         if (replacing) {
             ScreenHeading(stringResource(R.string.profile_new), description)
         } else {
-            PocketPass()
+            PocketPassHeader(title = stringResource(R.string.profile_add))
             Text(
                 description,
                 style = MaterialTheme.typography.bodyLarge,
@@ -111,38 +103,5 @@ fun ImportScreen(
             )
         }
         PrimaryButton(stringResource(R.string.action_continue), onNext, enabled = canContinue)
-    }
-}
-
-@Composable
-private fun PocketPass() {
-    Surface(shape = RoundedCornerShape(32.dp), color = MaterialTheme.colorScheme.primaryContainer) {
-        Row(
-            Modifier.fillMaxWidth().padding(24.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.weight(1f)) {
-                Text(stringResource(R.string.app_name), style = MaterialTheme.typography.labelLarge)
-                Text(
-                    stringResource(R.string.profile_add),
-                    style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.semantics { heading() },
-                )
-            }
-            Surface(
-                modifier = Modifier.rotate(-10f),
-                shape = RoundedCornerShape(28.dp),
-                color = MaterialTheme.colorScheme.primary,
-            ) {
-                Box(Modifier.size(100.dp), contentAlignment = Alignment.Center) {
-                    PocketIcon(
-                        Symbols.drawable.materialsymbols_ic_qr_code_2_rounded,
-                        modifier = Modifier.size(64.dp),
-                        tint = MaterialTheme.colorScheme.onPrimary,
-                    )
-                }
-            }
-        }
     }
 }

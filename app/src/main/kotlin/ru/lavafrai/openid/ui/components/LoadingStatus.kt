@@ -29,9 +29,14 @@ internal fun LoadingStatus(state: PocketUiState) {
         Text(
             when (state.destination) {
                 PocketDestination.IMPORT -> stringResource(R.string.loading_import_check)
-                PocketDestination.ROOT_SOURCE -> state.rootStage?.label() ?: stringResource(R.string.root_checking)
+
+                PocketDestination.ROOT_SOURCE ->
+                    state.rootStage?.let { rootStageLabel(it) } ?: stringResource(R.string.root_checking)
+
                 PocketDestination.SETUP -> stringResource(R.string.loading_import_save)
+
                 PocketDestination.SETTINGS -> stringResource(R.string.loading_settings)
+
                 else -> state.qrStage?.label() ?: stringResource(R.string.loading_sign_in)
             },
             style = MaterialTheme.typography.bodyMedium,
@@ -39,8 +44,9 @@ internal fun LoadingStatus(state: PocketUiState) {
     }
 }
 
+/** Shared user-facing label for an automatic-import stage, used by the inline row and the overlay. */
 @Composable
-private fun RootImportStage.label(): String = when (this) {
+internal fun rootStageLabel(stage: RootImportStage): String = when (stage) {
     RootImportStage.CHECKING_ROOT -> stringResource(R.string.root_stage_check)
     RootImportStage.LOCATING_MAX -> stringResource(R.string.root_stage_locate)
     RootImportStage.READING_PREFERENCES -> stringResource(R.string.root_stage_prefs)

@@ -66,7 +66,7 @@ class PocketController(
         },
         onFailure = { error -> mutableState.update { it.copy(screenError = error) } },
         onFinished = {
-            mutableState.update { it.copy(screenBusy = false) }
+            mutableState.update { it.copy(screenBusy = false, rootStage = null) }
             if (!foreground && !disposed && state.value.editingImport) imports.onBackground()
         },
     )
@@ -972,7 +972,8 @@ class PocketController(
                 settings = null,
                 notice = null,
                 importForm = if (editingImport) it.importForm else ImportForm(),
-                rootStage = null,
+                // The capture keeps running while the user is in MAX.
+                rootStage = it.rootStage.takeIf { committing && !disposed },
                 pin = "",
                 authPrompt = null,
                 autoUnlockPending = true,

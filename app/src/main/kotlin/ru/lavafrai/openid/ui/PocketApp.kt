@@ -99,17 +99,18 @@ fun PocketApp(viewModel: PocketViewModel) {
         owner.lifecycle.addObserver(observer)
         onDispose { owner.lifecycle.removeObserver(observer) }
     }
+    val rootStage = state.rootStage.takeIf { state.destination == PocketDestination.ROOT_SOURCE && state.busy }
     BackHandler(state.hasBack || state.busy) {
-        if (!state.busy) controller.dispatch(PocketAction.Back(state.destination))
+        when {
+            rootStage != null -> controller.dispatch(PocketAction.CancelRootImport)
+            !state.busy -> controller.dispatch(PocketAction.Back(state.destination))
+        }
     }
-    Box(Modifier.fillMaxSize()) {
+    if (rootStage == null) {
         PocketContent(state, controller::dispatch)
-        // While the MAX capture runs, a dedicated full-screen overlay stands in for the small inline
-        // loading row: it is shown as soon as the user returns from MAX so the long waits do not look
-        // like a hang. It is gated on an active root import (rootStage != null) so DFRoot runs, which
-        // report progress as plain message lines, keep the ordinary screen.
-        if (state.destination == PocketDestination.ROOT_SOURCE && state.busy) {
-            state.rootStage?.let { RootImportOverlay(it) }
+    } else {
+        RootImportOverlay(rootStage, state.rootImportCancelPending) {
+            controller.dispatch(PocketAction.CancelRootImport)
         }
     }
     if (state.confirmDelete) {
@@ -209,13 +210,7 @@ internal fun PocketContent(
                             icon = Symbols.drawable.materialsymbols_ic_info_rounded,
                         )
                     }
-                    // The dedicated full-screen overlay (see PocketApp) replaces this inline row while
-                    // the MAX capture runs, so it is suppressed there to avoid a duplicate announcement.
-                    val rootOverlayActive = state.destination == PocketDestination.ROOT_SOURCE &&
-                        state.rootStage != null
-                    if (state.busy && state.destination != PocketDestination.QR && !pinEntry &&
-                        !rootOverlayActive
-                    ) {
+                    if (state.busy && state.destination != PocketDestination.QR && !pinEntry) {
                         LoadingStatus(state)
                     }
                     PocketNavigation(state, manualPinEntry, { manualPinEntry = it }, dispatch)

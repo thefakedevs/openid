@@ -19,8 +19,8 @@
     <string name="method_title">Добавление профиля</string>
     <string name="method_description">Выберите, как добавить профиль Digital ID.</string>
     <string name="method_auto_label">Автоматически</string>
-    <string name="method_auto_description">Приложение само откроет MAX, считает Цифровой ID и вернётся обратно. Нужен MAX с активным входом на этом телефоне.</string>
-    <string name="method_auto_steps">Как это будет:\n1. Откроется приложение MAX.\n2. Вы откроете раздел «Цифровой ID» и разблокируете его.\n3. Приложение само вернётся с готовым профилем.</string>
+    <string name="method_auto_description">Нужны установленный MAX с активным входом и повышенные права на этом телефоне.</string>
+    <string name="method_auto_steps">Как это будет:\n1. Откроется приложение MAX.\n2. Откройте раздел «Цифровой ID» и разблокируйте его.\n3. После возврата в OpenID настройте защиту и сохраните профиль.</string>
     <string name="root_source_instruction">После нажатия «Продолжить» приложение само откроет MAX. Откройте там Цифровой ID и разблокируйте его — как только данные будут получены, приложение вернёт вас обратно.</string>
     <string name="root_confirm_title">Сейчас откроется MAX</string>
     <string name="root_confirm_message">1. Приложение откроет MAX.\n2. В MAX откройте раздел «Цифровой ID» и разблокируйте его.\n3. Подождите: как только данные будут получены, OpenID вернётся на экран сам. Если этого не произошло, вернитесь в OpenID вручную.</string>
@@ -153,7 +153,8 @@
     <string name="root_stage_memory">Сканируем память MAX…</string>
     <string name="root_overlay_title">Импорт из MAX</string>
     <string name="root_overlay_hint">Откройте в MAX раздел «Цифровой ID» и разблокируйте его. Как только данные будут считаны, вы вернётесь сюда автоматически.</string>
-    <string name="root_overlay_wait">Это может занять до минуты. Не закрывайте MAX до возврата.</string>
+    <string name="root_overlay_wait">При повторной попытке ожидание может занять несколько минут.</string>
+    <string name="root_overlay_cancelling">Отменяем импорт…</string>
     <string name="root_debug_log">Показать лог диагностики</string>
     <string name="root_debug_log_title">Лог диагностики</string>
     <string name="root_debug_log_empty">Лог пуст. Запустите автоимпорт, чтобы собрать данные.</string>

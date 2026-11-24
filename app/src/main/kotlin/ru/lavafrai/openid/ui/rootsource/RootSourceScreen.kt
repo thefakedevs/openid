@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.net.Uri
+import android.os.PersistableBundle
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -28,6 +29,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -39,6 +42,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.composables.icons.materialsymbols.rounded.R as Symbols
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import ru.lavafrai.openid.R
 import ru.lavafrai.openid.data.repositories.maximport.api.RootImportPackages
 import ru.lavafrai.openid.navigation.RootSource
@@ -154,7 +160,8 @@ fun RootSourceScreen(
 @Composable
 private fun DebugLogButton() {
     val context = LocalContext.current
-    var log by rememberSaveable { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    var log by remember { mutableStateOf<String?>(null) }
     log?.let { contents ->
         AlertDialog(
             onDismissRequest = { log = null },
@@ -179,7 +186,11 @@ private fun DebugLogButton() {
         )
     }
     TextButton(
-        onClick = { log = readTrace(context) },
+        onClick = {
+            scope.launch {
+                log = withContext(Dispatchers.IO) { readTrace(context) }
+            }
+        },
         modifier = Modifier.fillMaxWidth(),
     ) { Text(stringResource(R.string.root_debug_log)) }
 }
@@ -197,7 +208,11 @@ private fun copyToClipboard(
 ) {
     runCatching {
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(ClipData.newPlainText("maximport trace", text))
+        val clip = ClipData.newPlainText("maximport trace", text)
+        clip.description.extras = PersistableBundle().apply {
+            putBoolean("android.content.extra.IS_SENSITIVE", true)
+        }
+        clipboard.setPrimaryClip(clip)
     }
 }
 

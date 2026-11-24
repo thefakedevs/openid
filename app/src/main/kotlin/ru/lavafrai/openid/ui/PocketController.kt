@@ -69,7 +69,7 @@ class PocketController(
         },
         onFailure = { error -> mutableState.update { it.copy(screenError = error) } },
         onFinished = {
-            mutableState.update { it.copy(screenBusy = false, rootStage = null) }
+            mutableState.update { it.copy(screenBusy = false, rootStage = null, rootImportCancelPending = false) }
             if (!foreground && !disposed && state.value.editingImport) imports.onBackground()
         },
     )
@@ -115,6 +115,8 @@ class PocketController(
             is PocketAction.SelectRootSource -> selectRootSource(action.value)
 
             PocketAction.ContinueRootImport -> continueRootImport()
+
+            PocketAction.CancelRootImport -> cancelRootImport()
 
             PocketAction.RefreshRootCheck -> refreshRootCheck()
 
@@ -366,9 +368,11 @@ class PocketController(
         // Survives backgrounding but not disposal: the frida capture waits for the user to open Digital ID in MAX, which
         // backgrounds this app; the operation must survive that round trip.
         runOperation(ErrorOperation.ROOT_IMPORT, ErrorRecovery.ROOT_IMPORT, survivesBackground = true) {
+            val operationContext = currentCoroutineContext()
             var switchedToMax = false
             try {
                 val account = actions.extractMaxAccount { stage ->
+                    operationContext.ensureActive()
                     mutableState.update { it.copy(rootStage = stage) }
                     when (stage) {
                         // Each capture pass re-enters this stage after the app has been brought back
@@ -411,6 +415,17 @@ class PocketController(
                 throw failure
             }
         }
+    }
+
+    private fun cancelRootImport() {
+        val current = state.value
+        if (current.destination != PocketDestination.ROOT_SOURCE || !current.busy ||
+            current.rootStage == null || current.rootImportCancelPending
+        ) {
+            return
+        }
+        mutableState.update { it.copy(rootImportCancelPending = true) }
+        operations.cancelActive()
     }
 
     /** Brings MAX to the foreground and asks the user, via a system toast, to open and unlock Digital ID. */

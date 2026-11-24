@@ -56,7 +56,7 @@ fun MethodScreen(
         }
         // The full "open MAX → unlock Digital ID → we return" walkthrough is shown up front, as soon
         // as the automatic method is picked, instead of only in the final confirmation dialog.
-        AnimatedVisibility(visible = selected == ImportMethod.AUTO) {
+        AnimatedVisibility(visible = BuildConfig.DEBUG && selected == ImportMethod.AUTO) {
             InfoCard(
                 stringResource(R.string.method_auto_steps),
                 icon = Symbols.drawable.materialsymbols_ic_info_rounded,

@@ -6,12 +6,15 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -27,22 +30,22 @@ import com.composables.icons.materialsymbols.rounded.R as Symbols
 import ru.lavafrai.openid.R
 import ru.lavafrai.openid.data.repositories.maximport.api.RootImportStage
 
-/**
- * Full-screen progress overlay for the automatic MAX import. It is shown the whole time the capture
- * runs — including right after the user is returned from MAX — so the long waits (up to ~30–45s)
- * read as deliberate progress rather than a frozen screen. It states the current stage and, plainly,
- * what to do inside MAX.
- */
+/** Shows progress and keeps cancellation accessible even on a short screen. */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-fun RootImportOverlay(stage: RootImportStage) {
+fun RootImportOverlay(
+    stage: RootImportStage,
+    cancelling: Boolean,
+    onCancel: () -> Unit,
+) {
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
         Box(
-            Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 24.dp, vertical = 32.dp),
+            Modifier.fillMaxSize().safeDrawingPadding(),
             contentAlignment = Alignment.Center,
         ) {
             Column(
-                modifier = Modifier.widthIn(max = 420.dp).fillMaxWidth(),
+                modifier = Modifier.widthIn(max = 420.dp).fillMaxWidth()
+                    .verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 32.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(24.dp),
             ) {
@@ -56,23 +59,28 @@ fun RootImportOverlay(stage: RootImportStage) {
                         style = MaterialTheme.typography.titleLarge,
                     )
                     Text(
-                        rootStageLabel(stage),
+                        if (cancelling) stringResource(R.string.root_overlay_cancelling) else rootStageLabel(stage),
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center,
                         modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                     )
                 }
-                InfoCard(
-                    stringResource(R.string.root_overlay_hint),
-                    icon = Symbols.drawable.materialsymbols_ic_lock_open_rounded,
-                )
-                Text(
-                    stringResource(R.string.root_overlay_wait),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                )
+                if (!cancelling) {
+                    InfoCard(
+                        stringResource(R.string.root_overlay_hint),
+                        icon = Symbols.drawable.materialsymbols_ic_lock_open_rounded,
+                    )
+                    Text(
+                        stringResource(R.string.root_overlay_wait),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+                OutlinedButton(onClick = onCancel, enabled = !cancelling) {
+                    Text(stringResource(R.string.action_cancel))
+                }
             }
         }
     }

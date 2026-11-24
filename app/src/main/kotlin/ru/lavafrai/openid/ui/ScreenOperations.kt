@@ -25,7 +25,7 @@ internal class ScreenOperations(
 
     fun run(
         operation: ErrorOperation,
-        recovery: ErrorRecovery,
+        recovery: ErrorRecovery?,
         survivesBackground: Boolean = false,
         block: suspend () -> Unit,
     ) {

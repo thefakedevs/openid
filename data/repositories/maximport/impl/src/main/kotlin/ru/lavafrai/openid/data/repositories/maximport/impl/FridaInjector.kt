@@ -126,7 +126,7 @@ internal class FridaInjector(
         waitMillis: Long = 60_000L,
     ): Capture {
         val pid = resolveMaxPid(user)
-        trace.line("frida capture pid=$pid user=$user")
+        trace.line("frida target running=${pid != null}")
         if (pid == null) return Capture.Failed("DID_TOKEN_NOT_RUNNING")
         if (!install()) return Capture.Failed("FRIDA_INSTALL_FAILED")
         val result = resultPath(user)
@@ -140,7 +140,6 @@ internal class FridaInjector(
                 ignoreExitCode = true,
             )
             trace.line("frida injector finished len=${outcome?.length ?: -1}")
-            trace.line("frida injector output: ${outcome?.take(280) ?: "null"}")
         }
         delay(AGENT_ARM_MILLIS)
         trace.line("frida agent armed, bringing MAX forward")

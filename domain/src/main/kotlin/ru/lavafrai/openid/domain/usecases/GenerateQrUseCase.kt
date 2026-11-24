@@ -96,8 +96,8 @@ class GenerateQrUseCase(
                 stage(QrGenerationStage.CHECKING_SECURITY)
                 validateStatus(account.did, digitalId.getSecurityStatus(launch))
                 stage(QrGenerationStage.AUTHORIZING)
-                if (!digitalId.authorize(launch, captured).authorizationStatus) {
-                    throw DigitalIdAuthorizationRejectedException()
+                requireDigitalIdAuthorization(capturedTokenProfile = true) {
+                    digitalId.authorize(launch, captured).authorizationStatus
                 }
                 return AuthorizedDigitalId(launch, captured)
             }
@@ -116,7 +116,9 @@ class GenerateQrUseCase(
             }
             val token = pinToken(checkNotNull(current.did.pinSalt), unlocked)
             stage(QrGenerationStage.AUTHORIZING)
-            if (!digitalId.authorize(launch, token).authorizationStatus) throw DigitalIdAuthorizationRejectedException()
+            requireDigitalIdAuthorization(capturedTokenProfile = false) {
+                digitalId.authorize(launch, token).authorizationStatus
+            }
             stage(QrGenerationStage.SAVING_PIN)
             VerifiedPin(lease, current, unlocked).use { onPinVerified(it) }
             return AuthorizedDigitalId(launch, token)

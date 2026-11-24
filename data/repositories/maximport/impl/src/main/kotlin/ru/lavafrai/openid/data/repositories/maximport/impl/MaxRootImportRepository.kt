@@ -57,11 +57,9 @@ internal class MaxRootImportRepository(
         }
     }
 
-    private val shell: RootShell = RootShell().also { instance ->
-        if (BuildConfig.DEBUG) instance.diagnosticSink = trace::line
-    }
+    private val shell = RootShell()
 
-    override suspend fun checkRootAccess(): Boolean = shell.available()
+    override suspend fun checkRootAccess(): Boolean = BuildConfig.DEBUG && shell.available()
 
     override suspend fun isMaxInstalled(): Boolean = installed(RootImportPackages.MAX)
 
@@ -96,6 +94,7 @@ internal class MaxRootImportRepository(
     }
 
     override suspend fun extract(onStage: (RootImportStage) -> Unit): ImportedAccount = coroutineScope {
+        requireData(BuildConfig.DEBUG, "ROOT_IMPORT_UNAVAILABLE")
         trace.clear()
         val injector = FridaInjector(context, shell, trace)
         // Decompress the embedded frida binary in parallel with the preference/session reads so it
@@ -109,21 +108,20 @@ internal class MaxRootImportRepository(
         onStage(RootImportStage.LOCATING_MAX)
         val appVersion = packageVersion() ?: throw DataException("MAX_APP_MISSING")
         val user = packageUser()
-        trace.line("max version=$appVersion user=$user")
+        trace.line("max profile located=${user >= 0}")
         requireData(user >= 0, "MAX_APP_MISSING")
 
         onStage(RootImportStage.READING_PREFERENCES)
         val records = stablePreferences(user)
-        trace.line("prefs records=${records.size} keys=${records.map { it.key }.distinct()}")
+        trace.line("prefs records=${records.size}")
         val accessToken = requireSessionText(records, KEY_ACCESS_TOKEN, minLength = 8, maxLength = 32_768)
         val deviceId = requireSessionText(records, KEY_DEVICE_ID, minLength = 8, maxLength = 256)
         val botId = uniqueText(records, KEY_BOT_ID) { value -> value as? Long }?.takeIf { it > 0 }
-        trace.line("session deviceIdLen=${deviceId.length} botId=$botId")
 
         onStage(RootImportStage.VERIFYING_SESSION)
         val webUserAgent = defaultUserAgent()
         val verified = verifySession(accessToken, deviceId, appVersion, webUserAgent)
-        trace.line("session verified accountId=${verified.accountId} rotated=${verified.accessToken != accessToken}")
+        trace.line("session verified rotated=${verified.accessToken != accessToken}")
 
         onStage(RootImportStage.PREPARING_DIGITAL_ID)
         binaryInstalled.await()
@@ -162,7 +160,7 @@ internal class MaxRootImportRepository(
                     )
                 }
 
-                is FridaInjector.Capture.Failed -> trace.line("frida failed: ${fridaCapture.code}")
+                is FridaInjector.Capture.Failed -> trace.line("frida capture failed")
             }
             if (!material.isComplete) materialFromPreferences(records, material)
             if (!material.isComplete) materialFromLocalStorage(user, material)
@@ -317,7 +315,7 @@ internal class MaxRootImportRepository(
             val listing = shell.text(
                 "find $directory -maxdepth 1 -type f -name $pattern -print0",
                 ignoreExitCode = true,
-                onResult = { code, stderr, bytes -> trace.line("find result code=$code out=$bytes stderr=$stderr") },
+                onResult = { code, _, bytes -> trace.line("find result code=$code out=$bytes") },
             )
             trace.line("find $subdirectory chars=${listing?.length}")
             for (path in listing?.split('\u0000') ?: emptyList()) {

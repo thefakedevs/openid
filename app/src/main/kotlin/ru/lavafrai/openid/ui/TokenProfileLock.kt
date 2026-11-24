@@ -48,24 +48,25 @@ class TokenProfileLock(
         accountId: Long,
         pin: CharArray,
         biometric: Boolean,
-    ) {
+    ): Boolean {
         // PBKDF2 is deliberately slow: keep it (and the preference writes) off the caller's thread.
         // NonCancellable is the OUTER context and the dispatcher switch is inside it: returning from a
         // dispatcher switch into an already cancelled caller would throw and drop the finished result,
         // while the same-dispatcher NonCancellable wrapper hands it back. Once the lock is written the
         // caller must learn it, or a cancelled first-time setup leaves a lock the UI does not know about.
-        withContext(NonCancellable) {
+        return withContext(NonCancellable) {
             withContext(workDispatcher) {
                 deleteKey()
                 val salt = ByteArray(SALT_BYTES).also { SecureRandom().nextBytes(it) }
                 val hash = hash(pin, salt)
+                val biometricReady = biometric && runCatching { createKey() }.isSuccess
                 preferences.edit {
                     putLong("accountId", accountId)
                     putString("salt", salt.encode())
                     putString("hash", hash.encode())
-                    putBoolean("biometric", biometric)
+                    putBoolean("biometric", biometricReady)
                 }
-                if (biometric) runCatching { createKey() }
+                biometricReady
             }
         }
     }
@@ -110,10 +111,10 @@ class TokenProfileLock(
         }.getOrNull()
     }
 
-    fun enableBiometric(accountId: Long) {
-        if (preferences.getLong("accountId", -1) != accountId) return
+    fun enableBiometric(accountId: Long): Boolean {
+        if (!isConfigured(accountId) || runCatching { createKey() }.isFailure) return false
         preferences.edit { putBoolean("biometric", true) }
-        runCatching { createKey() }
+        return true
     }
 
     /** The Keystore key was invalidated (e.g. biometric enrollment changed); fall back to the typed PIN. */

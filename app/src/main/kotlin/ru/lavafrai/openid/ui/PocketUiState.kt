@@ -50,6 +50,7 @@ data class PocketUiState(
     val savedPin: SavedPinState = SavedPinState.Loading,
     val importMode: ImportMode = ImportMode.NEW,
     val importMethod: ImportMethod? = null,
+    val dfRootSupported: Boolean = false,
     val rootSource: RootSource? = null,
     val rootCheck: RootCheckState = RootCheckState.IDLE,
     val maxInstalled: Boolean = true,

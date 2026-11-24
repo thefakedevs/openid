@@ -2,10 +2,13 @@ package ru.lavafrai.openid.data.repositories.maximport.impl
 
 import android.content.Context
 import java.io.File
+import ru.lavafrai.openid.data.repositories.maximport.api.RootImportPackages
 
 /** Append-only diagnostic trace of the last extraction; lives in the app cache directory. */
 internal open class TraceLog(private val file: File) {
-    constructor(context: Context) : this(File(context.cacheDir, "maximport_trace.log"))
+    constructor(context: Context) : this(File(context.cacheDir, RootImportPackages.TRACE_LOG_FILE)) {
+        File(context.cacheDir, "maximport_trace.log").delete()
+    }
 
     private val lock = Any()
 

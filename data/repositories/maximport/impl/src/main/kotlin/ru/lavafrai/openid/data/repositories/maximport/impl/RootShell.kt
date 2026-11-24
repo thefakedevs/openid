@@ -18,9 +18,6 @@ import kotlinx.coroutines.runInterruptible
  * timeout — otherwise a caller that cancels early still stalls for up to that long.
  */
 internal class RootShell(private val io: kotlinx.coroutines.CoroutineDispatcher = Dispatchers.IO) {
-    /** Optional diagnostics sink; the repository wires it to its trace file. */
-    var diagnosticSink: ((String) -> Unit)? = null
-
     suspend fun available(): Boolean = runInterruptible(io) {
         runCatching {
             execute("id", PROBE_TIMEOUT_MILLIS, ignoreExitCode = false)
@@ -71,13 +68,6 @@ internal class RootShell(private val io: kotlinx.coroutines.CoroutineDispatcher 
                         "dd if=/proc/$pid/mem bs=4096 skip=${firstPage + offset} count=$batch",
                         READ_TIMEOUT_MILLIS,
                         ignoreExitCode = true,
-                        onResult = { code, stderr, bytes ->
-                            if (code !=
-                                0
-                            ) {
-                                diagnosticSink?.invoke("dd pid=$pid offset=$offset code=$code err=${stderr.take(120)}")
-                            }
-                        },
                     )
                 }.getOrNull()
             } ?: return false

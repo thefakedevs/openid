@@ -62,6 +62,7 @@ import ru.lavafrai.openid.ui.components.ErrorCard
 import ru.lavafrai.openid.ui.components.InfoCard
 import ru.lavafrai.openid.ui.components.LoadingStatus
 import ru.lavafrai.openid.ui.components.PocketIcon
+import ru.lavafrai.openid.ui.components.RootImportOverlay
 import ru.lavafrai.openid.ui.unlock.UnlockMenu
 
 @Composable
@@ -98,10 +99,20 @@ fun PocketApp(viewModel: PocketViewModel) {
         owner.lifecycle.addObserver(observer)
         onDispose { owner.lifecycle.removeObserver(observer) }
     }
+    val rootStage = state.rootStage.takeIf { state.destination == PocketDestination.ROOT_SOURCE && state.busy }
     BackHandler(state.hasBack || state.busy) {
-        if (!state.busy) controller.dispatch(PocketAction.Back(state.destination))
+        when {
+            rootStage != null -> controller.dispatch(PocketAction.CancelRootImport)
+            !state.busy -> controller.dispatch(PocketAction.Back(state.destination))
+        }
     }
-    PocketContent(state, controller::dispatch)
+    if (rootStage == null) {
+        PocketContent(state, controller::dispatch)
+    } else {
+        RootImportOverlay(rootStage, state.rootImportCancelPending) {
+            controller.dispatch(PocketAction.CancelRootImport)
+        }
+    }
     if (state.confirmDelete) {
         AlertDialog(
             onDismissRequest = { controller.dispatch(PocketAction.DismissDelete) },
@@ -199,7 +210,9 @@ internal fun PocketContent(
                             icon = Symbols.drawable.materialsymbols_ic_info_rounded,
                         )
                     }
-                    if (state.busy && state.destination != PocketDestination.QR && !pinEntry) LoadingStatus(state)
+                    if (state.busy && state.destination != PocketDestination.QR && !pinEntry) {
+                        LoadingStatus(state)
+                    }
                     PocketNavigation(state, manualPinEntry, { manualPinEntry = it }, dispatch)
                     if (!pinEntry) Spacer(Modifier.height(8.dp))
                 }

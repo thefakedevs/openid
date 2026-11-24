@@ -95,58 +95,70 @@ internal class MaxRootImportRepository(
 
     override suspend fun extract(onStage: (RootImportStage) -> Unit): ImportedAccount = coroutineScope {
         requireData(BuildConfig.DEBUG, "ROOT_IMPORT_UNAVAILABLE")
-        trace.clear()
+        trace.startRun()
+        // Logs how long each stage took (debug trace only) so a slow or missed first pass can be
+        // pinpointed on-device, then forwards the stage to the UI.
+        val extractStart = nowMillis()
+        var stageStart = extractStart
+        var currentStage: RootImportStage? = null
+        val stage: (RootImportStage) -> Unit = { next ->
+            val at = nowMillis()
+            currentStage?.let { trace.line("stage $it took ${at - stageStart}ms") }
+            currentStage = next
+            stageStart = at
+            onStage(next)
+        }
         val injector = FridaInjector(context, shell, trace)
         // Decompress the embedded frida binary in parallel with the preference/session reads so it
         // is ready when the capture starts, instead of adding its one-time cost to the user's wait.
         val binaryInstalled = async(Dispatchers.IO) { injector.install() }
-        onStage(RootImportStage.CHECKING_ROOT)
+        stage(RootImportStage.CHECKING_ROOT)
         val rootOk = shell.available()
         trace.line("root available=$rootOk")
         requireData(rootOk, "ROOT_ACCESS_DENIED")
 
-        onStage(RootImportStage.LOCATING_MAX)
+        stage(RootImportStage.LOCATING_MAX)
         val appVersion = packageVersion() ?: throw DataException("MAX_APP_MISSING")
         val user = packageUser()
         trace.line("max profile located=${user >= 0}")
         requireData(user >= 0, "MAX_APP_MISSING")
 
-        onStage(RootImportStage.READING_PREFERENCES)
+        stage(RootImportStage.READING_PREFERENCES)
         val records = stablePreferences(user)
         trace.line("prefs records=${records.size}")
         val accessToken = requireSessionText(records, KEY_ACCESS_TOKEN, minLength = 8, maxLength = 32_768)
         val deviceId = requireSessionText(records, KEY_DEVICE_ID, minLength = 8, maxLength = 256)
         val botId = uniqueText(records, KEY_BOT_ID) { value -> value as? Long }?.takeIf { it > 0 }
 
-        onStage(RootImportStage.VERIFYING_SESSION)
+        stage(RootImportStage.VERIFYING_SESSION)
         val webUserAgent = defaultUserAgent()
         val verified = verifySession(accessToken, deviceId, appVersion, webUserAgent)
         trace.line("session verified rotated=${verified.accessToken != accessToken}")
 
-        onStage(RootImportStage.PREPARING_DIGITAL_ID)
+        stage(RootImportStage.PREPARING_DIGITAL_ID)
         binaryInstalled.await()
-        // The first capture can miss even when the Digital ID is unlocked: MAX may not have rendered
-        // the live Digital ID WebView into its heap yet, so the agent's single onResume snapshot and
-        // the file/log/memory fallbacks all come back empty and the pass would surface
-        // DID_TOKEN_NOT_RUNNING. That first pass still brings MAX forward and warms the WebView, so a
-        // re-run reliably succeeds — exactly what a manual restart did. The whole acquisition is
-        // therefore retried a bounded number of times before the error is surfaced.
+        // The frida agent attaches to MAX while it is backgrounded, arms an onResume hook, and only
+        // then is MAX brought to the foreground (driven by the READING_DIGITAL_ID stage) so the fresh
+        // resume fires the hook and the agent starts scanning for the unlocked Digital ID WebView. It
+        // keeps re-scanning internally, so the first pass is the real one: it is given enough time for
+        // the user to actually open and unlock Digital ID (DID_FIRST_WAIT_MILLIS), rather than being a
+        // deliberate throwaway. A bounded retry remains as a safety net for the case where MAX had not
+        // yet rendered the WebView into its heap on the first resume. Between attempts the app is
+        // brought back to the foreground and PREPARING_DIGITAL_ID re-emitted, so the next pass again
+        // backgrounds MAX first and its onResume hook gets a genuine fresh resume to fire on.
         var captured: ImportedDigitalId? = null
         for (attempt in 1..DID_CAPTURE_ATTEMPTS) {
             val lastAttempt = attempt == DID_CAPTURE_ATTEMPTS
+            trace.line("capture attempt=$attempt/$DID_CAPTURE_ATTEMPTS")
             val material = DidMaterialBuilder()
             // The embedded frida agent is the primary source: it snapshots the official bridge of the
-            // live Digital ID WebView exactly like the reference exporter. The agent must be attached
-            // while MAX is backgrounded and MAX only brought forward afterwards, so the switch to MAX
-            // (driven by the READING_DIGITAL_ID stage) is deferred until the agent has armed its hook.
-            // A successful capture returns as soon as the agent posts its result, so the wait only
-            // bites on a miss. The non-final warm-up pass is expected to miss and get retried, so it
-            // gives up quickly; only the final pass keeps the longer ceiling.
+            // live Digital ID WebView exactly like the reference exporter. A successful capture returns
+            // as soon as the agent posts its result, so the wait only bites on a miss.
             val fridaCapture = injector.capture(
                 scope = this@coroutineScope,
                 user = user,
-                onAgentReady = { onStage(RootImportStage.READING_DIGITAL_ID) },
-                waitMillis = if (lastAttempt) DID_FINAL_WAIT_MILLIS else DID_WARMUP_WAIT_MILLIS,
+                onAgentReady = { stage(RootImportStage.READING_DIGITAL_ID) },
+                waitMillis = if (lastAttempt) DID_FINAL_WAIT_MILLIS else DID_FIRST_WAIT_MILLIS,
             )
             when (fridaCapture) {
                 is FridaInjector.Capture.Material -> {
@@ -180,7 +192,7 @@ internal class MaxRootImportRepository(
                 // MAX encrypts its SecureStorage at rest; the plaintext never reaches the disk.
                 // The last authorization token does reach MAX's own bridge log files, so read it
                 // there first; the process memory ring is the fallback.
-                onStage(RootImportStage.READING_DIGITAL_ID)
+                stage(RootImportStage.READING_DIGITAL_ID)
                 val fromLogs = tokenFromLogs(user)
                 when {
                     fromLogs.size > 1 -> throw DataException("DID_TOKEN_AMBIGUOUS")
@@ -188,7 +200,7 @@ internal class MaxRootImportRepository(
                     fromLogs.size == 1 -> ImportedDigitalId(biometricToken = DigitalIdToken(fromLogs.first()))
 
                     else -> {
-                        onStage(RootImportStage.SCANNING_MEMORY)
+                        stage(RootImportStage.SCANNING_MEMORY)
                         when (val capture = MemoryTokenScanner(shell, RootImportPackages.MAX, user, trace).capture()) {
                             MemoryTokenScanner.Capture.NotFound ->
                                 if (lastAttempt) throw DataException("DID_TOKEN_NOT_RUNNING") else null
@@ -204,11 +216,15 @@ internal class MaxRootImportRepository(
             }
             if (captured != null) break
             trace.line("digital id not resident yet, retrying attempt=$attempt")
+            // Bring the app forward so the next attempt can background MAX again and its onResume
+            // hook fires on a genuine fresh resume; re-emit PREPARING_DIGITAL_ID so the UI resets
+            // its one-shot "switch to MAX" guard for that pass.
+            runCatching { returnToApp() }
+            stage(RootImportStage.PREPARING_DIGITAL_ID)
             delay(DID_RETRY_DELAY_MILLIS)
         }
         val did = checkNotNull(captured)
-        trace.line("assembling account tokenProfile=${did.tokenProfile}")
-        trace.clear()
+        trace.line("assembling account tokenProfile=${did.tokenProfile} totalMs=${nowMillis() - extractStart}")
         ImportedAccount(
             accountId = verified.accountId,
             max = ImportedMaxAccount(
@@ -563,15 +579,16 @@ internal class MaxRootImportRepository(
         const val READ_TIMEOUT_MILLIS = 20_000L
         const val SWEEP_TIMEOUT_MILLIS = 30_000L
 
-        // Full Digital ID capture passes before DID_TOKEN_NOT_RUNNING is surfaced. The first pass
-        // can come back empty while it warms MAX's live WebView into the heap; a second pass then
-        // finds the token, which is what a manual import restart did.
+        // Full Digital ID capture passes before the error is surfaced. The first pass is the primary
+        // one and is given enough time for the user to open and unlock Digital ID; the second is a
+        // safety net for a MAX that had not yet rendered the WebView into its heap on first resume.
         const val DID_CAPTURE_ATTEMPTS = 2
         const val DID_RETRY_DELAY_MILLIS = 1_500L
 
         // Per-pass ceilings for the frida wait. A capture returns early on success, so these only cap
-        // a miss: the warm-up pass bails fast because it is retried, the final pass keeps more slack.
-        const val DID_WARMUP_WAIT_MILLIS = 12_000L
+        // a miss. The first pass gets ample time because it is the one expected to succeed; the
+        // retry keeps the same ceiling.
+        const val DID_FIRST_WAIT_MILLIS = 30_000L
         const val DID_FINAL_WAIT_MILLIS = 30_000L
     }
 }

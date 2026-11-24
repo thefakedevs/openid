@@ -54,6 +54,10 @@ internal class ScreenOperations(
         job?.cancel()
     }
 
+    fun cancelActive() {
+        job?.cancel()
+    }
+
     fun onBackground() {
         if (!committing) {
             version++

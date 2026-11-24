@@ -82,4 +82,6 @@ dependencies {
     implementation(libs.material.symbols.rounded)
 
     debugImplementation(libs.androidx.compose.ui.tooling)
+    testImplementation(libs.kotlin.test.junit)
+    testImplementation(libs.junit)
 }

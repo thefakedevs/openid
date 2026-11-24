@@ -69,7 +69,7 @@ class PocketController(
         },
         onFailure = { error -> mutableState.update { it.copy(screenError = error) } },
         onFinished = {
-            mutableState.update { it.copy(screenBusy = false) }
+            mutableState.update { it.copy(screenBusy = false, rootStage = null, rootImportCancelPending = false) }
             if (!foreground && !disposed && state.value.editingImport) imports.onBackground()
         },
     )
@@ -115,6 +115,8 @@ class PocketController(
             is PocketAction.SelectRootSource -> selectRootSource(action.value)
 
             PocketAction.ContinueRootImport -> continueRootImport()
+
+            PocketAction.CancelRootImport -> cancelRootImport()
 
             PocketAction.RefreshRootCheck -> refreshRootCheck()
 
@@ -366,13 +368,23 @@ class PocketController(
         // Survives backgrounding but not disposal: the frida capture waits for the user to open Digital ID in MAX, which
         // backgrounds this app; the operation must survive that round trip.
         runOperation(ErrorOperation.ROOT_IMPORT, ErrorRecovery.ROOT_IMPORT, survivesBackground = true) {
+            val operationContext = currentCoroutineContext()
             var switchedToMax = false
             try {
                 val account = actions.extractMaxAccount { stage ->
+                    operationContext.ensureActive()
                     mutableState.update { it.copy(rootStage = stage) }
-                    if (stage == RootImportStage.READING_DIGITAL_ID && !switchedToMax) {
-                        switchedToMax = true
-                        switchToMaxDigitalId()
+                    when (stage) {
+                        // Each capture pass re-enters this stage after the app has been brought back
+                        // to the foreground, so the guard is reset to allow a fresh switch to MAX.
+                        RootImportStage.PREPARING_DIGITAL_ID -> switchedToMax = false
+
+                        RootImportStage.READING_DIGITAL_ID -> if (!switchedToMax) {
+                            switchedToMax = true
+                            switchToMaxDigitalId()
+                        }
+
+                        else -> Unit
                     }
                 }
                 currentCoroutineContext().ensureActive()
@@ -380,7 +392,6 @@ class PocketController(
                 if (switchedToMax) runCatching { actions.returnToApp() }
                 currentCoroutineContext().ensureActive()
                 imports.hold(account)
-                showToast(R.string.root_import_done_toast)
                 // A captured-token profile has no Digital ID PIN to protect it (GenerateQrUseCase
                 // authorizes it with the bare token, bypassing PIN checks entirely), so without a
                 // deliberate local lock, opening its QR would need no confirmation at all once the
@@ -404,6 +415,17 @@ class PocketController(
                 throw failure
             }
         }
+    }
+
+    private fun cancelRootImport() {
+        val current = state.value
+        if (current.destination != PocketDestination.ROOT_SOURCE || !current.busy ||
+            current.rootStage == null || current.rootImportCancelPending
+        ) {
+            return
+        }
+        mutableState.update { it.copy(rootImportCancelPending = true) }
+        operations.cancelActive()
     }
 
     /** Brings MAX to the foreground and asks the user, via a system toast, to open and unlock Digital ID. */
@@ -1004,7 +1026,8 @@ class PocketController(
                 settings = null,
                 notice = null,
                 importForm = if (editingImport) it.importForm else ImportForm(),
-                rootStage = null,
+                // The capture keeps running while the user is in MAX.
+                rootStage = it.rootStage.takeIf { committing && !disposed },
                 pin = "",
                 authPrompt = null,
                 autoUnlockPending = true,

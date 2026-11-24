@@ -56,6 +56,7 @@ data class PocketUiState(
     val maxInstalled: Boolean = true,
     val suManagers: List<String> = emptyList(),
     val rootStage: RootImportStage? = null,
+    val rootImportCancelPending: Boolean = false,
     val tokenProfile: Boolean = false,
     val tokenLockConfigured: Boolean = false,
     val tokenLockBiometricAvailable: Boolean = false,
@@ -123,6 +124,8 @@ sealed interface PocketAction {
     data class SelectRootSource(val value: RootSource) : PocketAction
 
     data object ContinueRootImport : PocketAction
+
+    data object CancelRootImport : PocketAction
 
     data object RefreshRootCheck : PocketAction
 

@@ -15,9 +15,11 @@ enum class RootImportStage {
 
 /** Installed packages and links used by the automatic import flow. */
 object RootImportPackages {
-    const val TRACE_LOG_FILE = "maximport_diagnostics_v2.log"
     const val MAX = "ru.oneme.app"
     const val KSU_RELEASES_URL = "https://github.com/tiann/KernelSU/releases/latest"
+
+    /** Name of the debug-only extraction trace, written in the app cache directory. */
+    const val TRACE_LOG_FILE = "maximport_diagnostics_v2.log"
 }
 
 interface RootImportRepository {

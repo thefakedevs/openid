@@ -1,8 +1,16 @@
 package ru.lavafrai.openid.models.account
 
 import ru.lavafrai.openid.models.errors.FailureDiagnostic
-/** Safe to expose while the account credentials are locked. */
-data class AccountSummary(val accountId: Long)
+/**
+ * Safe to expose while the account credentials are locked. [tokenProfile] mirrors the stored
+ * account's [ImportedDigitalId.tokenProfile] and is the authoritative source of the profile kind
+ * for both UI routing and domain access checks; it is written atomically with the account, so it
+ * never drifts out of sync with the saved credentials.
+ */
+data class AccountSummary(
+    val accountId: Long,
+    val tokenProfile: Boolean = false,
+)
 
 sealed interface AccountState {
     data object Loading : AccountState

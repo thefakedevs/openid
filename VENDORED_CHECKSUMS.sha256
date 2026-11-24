@@ -1,0 +1,20 @@
+# SHA-256 checksums of vendored binary artifacts.
+# Verify with: sha256sum -c VENDORED_CHECKSUMS.sha256
+# These files are restricted to debug builds pending an independently verifiable source revision
+# and build provenance for each artifact.
+#
+# frida-inject.xz — Frida inject binary (arm64), compressed with xz.
+#   Source: https://github.com/frida/frida  (GPL / LGPL components)
+#   Decompressed at first root-import run; used to attach a JS agent to the MAX process.
+#
+# libdfroot.so — DFRoot native exploit binary (arm64).
+#
+# libbootstrap.so — DFRoot bootstrap helper (arm64).
+#
+# did-agent.js — Bundled Frida agent (minified JS).
+#   Built from the TypeScript source in the did-agent/ project (not in this repository yet).
+
+fa27b0478fbe1909978388d606236008c40e19ffddcea3bca69a6ed54fde02dc *data/repositories/maximport/impl/src/debug/assets/frida-inject.xz
+b64f6c38f5f5794edd87bc671a67cfd34872f523d3bf815fcd786766753ad4b0 *dfroot/src/debug/jniLibs/arm64-v8a/libdfroot.so
+eefc8fc3101fe2bfb68bbc529f86b7b26ecf63a02124f10b0ebf32fc40179633 *dfroot/src/debug/jniLibs/arm64-v8a/libbootstrap.so
+b872c0b12cee8a5a46c4472cc931b31f5976e8d43b42a6d49417eabfdab8c641 *data/repositories/maximport/impl/src/debug/assets/did-agent.js

@@ -82,7 +82,7 @@ class AccountRepositoryImpl(private val storage: SecretStorage) : AccountReposit
         requireData(state.value !is AccountState.Unavailable, "STORAGE_UNAVAILABLE")
     }
 
-    private fun summary(row: SecretRecord) = AccountSummary(row.accountId)
+    private fun summary(row: SecretRecord) = AccountSummary(row.accountId, row.tokenProfile)
 
     private fun publishState() {
         state.value = record?.let {
@@ -128,6 +128,7 @@ class AccountRepositoryImpl(private val storage: SecretStorage) : AccountReposit
                 VaultProtection.DEVICE,
                 raw,
                 null,
+                tokenProfile = account.did.tokenProfile,
             )
             storage.commit(
                 next,
@@ -158,7 +159,21 @@ class AccountRepositoryImpl(private val storage: SecretStorage) : AccountReposit
         try {
             val account = AccountCodec.decode(StrictJson.parse(secret.raw))
             requireData(account.accountId == row.accountId, "STORAGE_METADATA_MISMATCH")
+            requireData(account.did.tokenProfile == row.tokenProfile, "STORAGE_METADATA_MISMATCH")
             secret.raw.fill(0)
+            if (row.cryptoVersion < SecretRecord.CRYPTO_CURRENT) {
+                // Row sealed with an older AAD format (pre-migration). Re-encrypt it under the current
+                // format with a fresh key, then unlock the upgraded row.
+                secret.close()
+                handedOff = true
+                try {
+                    write(account, row)
+                } catch (failure: DataException) {
+                    // A concurrent unlock or token update already replaced the row; use its result.
+                    if (failure.code != "ACCOUNT_CHANGED") throw failure
+                }
+                return unlock()
+            }
             currentCoroutineContext().ensureActive()
             return synchronized(stateLock) {
                 requireData(record?.alias == row.alias, "ACCOUNT_CHANGED")

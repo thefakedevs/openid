@@ -28,12 +28,36 @@ enum class VaultProtection {
     LEGACY_SYSTEM_AUTH,
 }
 
+/**
+ * Authenticated data bound to both the wrapped data key and the ciphertext of a [SecretRecord].
+ * Rows keep the format they were sealed with ([SecretRecord.cryptoVersion]); a v1 PIN row stays v1
+ * until the PIN is saved again (re-wrapping needs another biometric prompt), and a v1 account row is
+ * re-encrypted to the current format on its next unlock.
+ */
+internal object VaultAad {
+    /**
+     * v1 rows predate token profiles (schema 1 required a PIN salt), so their AAD has no profile
+     * field and a v1 row claiming a token profile is invalid. The distinct "pocket-v2" prefix means a
+     * v2 row relabelled as v1 (to drop the profile binding) fails authentication.
+     */
+    fun of(record: SecretRecord): ByteArray = when (record.cryptoVersion) {
+        SecretRecord.CRYPTO_V1 -> {
+            requireData(!record.tokenProfile, "STORAGE_METADATA_INVALID")
+            "pocket-v1|${record.slot}|${record.accountId}|${record.protection}|${record.alias}"
+        }
+
+        SecretRecord.CRYPTO_V2 ->
+            "pocket-v2|${record.slot}|${record.accountId}|${record.protection}|${record.alias}|${record.tokenProfile}"
+
+        else -> throw DataException("STORAGE_METADATA_INVALID")
+    }.toByteArray(Charsets.UTF_8)
+}
+
 /** Per-use Keystore key wraps a random data key; an open lease can persist token rotation without another prompt. */
 class VaultCipher(private val context: Context) {
     private val keystore: KeyStore get() = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
 
-    private fun associatedData(record: SecretRecord) =
-        "pocket-v1|${record.slot}|${record.accountId}|${record.protection}|${record.alias}".toByteArray(Charsets.UTF_8)
+    private fun associatedData(record: SecretRecord): ByteArray = VaultAad.of(record)
 
     suspend fun create(
         slot: String,
@@ -42,6 +66,7 @@ class VaultCipher(private val context: Context) {
         protectionMode: VaultProtection,
         raw: ByteArray,
         authenticator: CryptoAuthenticator?,
+        tokenProfile: Boolean = false,
     ): SecretRecord {
         requireData(
             (slot == "account" && protection == "DEVICE_KEY" && protectionMode == VaultProtection.DEVICE) ||
@@ -85,6 +110,8 @@ class VaultCipher(private val context: Context) {
                 wrappingIv = cipher.iv,
                 ciphertext = byteArrayOf(),
                 iv = byteArrayOf(),
+                tokenProfile = tokenProfile,
+                cryptoVersion = SecretRecord.CRYPTO_CURRENT,
             )
             val record = withContext(Dispatchers.Default) {
                 cipher.updateAAD(associatedData(metadata))

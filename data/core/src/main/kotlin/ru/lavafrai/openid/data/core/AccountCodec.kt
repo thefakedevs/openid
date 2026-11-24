@@ -32,7 +32,22 @@ object AccountCodec {
         )
         val pinSalt = optionalString(digitalIdJson["pinSalt"], 4096)
         val biometricToken = optionalString(digitalIdJson["biometricToken"], 32768)
-        requireData(pinSalt != null, "DID_PIN_SALT_MISSING")
+        val biometricDeviceId = optionalString(digitalIdJson["biometricDeviceId"], 1024)
+        val timestamp = if (digitalIdJson.containsKey("creationTimestamp") &&
+            digitalIdJson["creationTimestamp"] != null
+        ) {
+            timestamp(digitalIdJson["creationTimestamp"])
+        } else {
+            null
+        }
+        requireData(pinSalt != null || biometricToken != null, "DID_PIN_SALT_MISSING")
+        if (pinSalt != null) {
+            // Full PIN profiles keep the biometry binding; token profiles carry none of it.
+            requireData(biometricDeviceId != null, "DID_BIOMETRY_DEVICE_MISSING")
+            requireData(timestamp != null, "DID_TIMESTAMP_MISSING")
+        } else {
+            requireData(biometricDeviceId == null && timestamp == null, "DID_TOKEN_PROFILE_MIXED")
+        }
 
         val webUserAgent = requireNonEmptyString(accountJson["webUserAgent"], 4096)
         requireData(webUserAgent.all { it.code in 32..126 }, "WEB_USER_AGENT_INVALID")
@@ -61,8 +76,8 @@ object AccountCodec {
                 botId = botId,
             ),
             did = ImportedDigitalId(
-                biometricDeviceId = requireNonEmptyString(digitalIdJson["biometricDeviceId"], 1024),
-                creationTimestamp = timestamp(digitalIdJson["creationTimestamp"]),
+                biometricDeviceId = biometricDeviceId,
+                creationTimestamp = timestamp,
                 pinSalt = pinSalt,
                 biometricToken = biometricToken?.let(::DigitalIdToken),
             ),
@@ -94,6 +109,7 @@ object AccountCodec {
 
     fun encode(account: ImportedAccount): ByteArray {
         val timestamp = when (val creationTimestamp = account.did.creationTimestamp) {
+            null -> null
             is DigitalIdTimestamp.Text -> creationTimestamp.value
             is DigitalIdTimestamp.Integer -> creationTimestamp.value
             is DigitalIdTimestamp.Decimal -> creationTimestamp.value

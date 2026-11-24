@@ -40,7 +40,8 @@ data class SecurityStatus(
     val tokenLevel: String,
     val deviceId: String,
     val timestamp: DigitalIdTimestamp,
-    val attemptsLeft: Int,
+    /** Null when the service omits it, e.g. for a captured-token profile that carries no PIN. */
+    val attemptsLeft: Int?,
     val cooldown: Double? = null,
 )
 

@@ -13,6 +13,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import ru.lavafrai.openid.R
+import ru.lavafrai.openid.data.repositories.maximport.api.RootImportStage
 import ru.lavafrai.openid.domain.models.QrGenerationStage
 import ru.lavafrai.openid.navigation.PocketDestination
 import ru.lavafrai.openid.ui.PocketUiState
@@ -28,6 +29,7 @@ internal fun LoadingStatus(state: PocketUiState) {
         Text(
             when (state.destination) {
                 PocketDestination.IMPORT -> stringResource(R.string.loading_import_check)
+                PocketDestination.ROOT_SOURCE -> state.rootStage?.label() ?: stringResource(R.string.root_checking)
                 PocketDestination.SETUP -> stringResource(R.string.loading_import_save)
                 PocketDestination.SETTINGS -> stringResource(R.string.loading_settings)
                 else -> state.qrStage?.label() ?: stringResource(R.string.loading_sign_in)
@@ -35,6 +37,17 @@ internal fun LoadingStatus(state: PocketUiState) {
             style = MaterialTheme.typography.bodyMedium,
         )
     }
+}
+
+@Composable
+private fun RootImportStage.label(): String = when (this) {
+    RootImportStage.CHECKING_ROOT -> stringResource(R.string.root_stage_check)
+    RootImportStage.LOCATING_MAX -> stringResource(R.string.root_stage_locate)
+    RootImportStage.READING_PREFERENCES -> stringResource(R.string.root_stage_prefs)
+    RootImportStage.VERIFYING_SESSION -> stringResource(R.string.root_stage_session)
+    RootImportStage.PREPARING_DIGITAL_ID -> stringResource(R.string.root_stage_preparing)
+    RootImportStage.READING_DIGITAL_ID -> stringResource(R.string.root_stage_material)
+    RootImportStage.SCANNING_MEMORY -> stringResource(R.string.root_stage_memory)
 }
 
 @Composable

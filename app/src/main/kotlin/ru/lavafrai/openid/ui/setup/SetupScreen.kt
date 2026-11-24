@@ -18,13 +18,17 @@ fun SetupScreen(
     pinProtection: PinProtection,
     busy: Boolean,
     replacing: Boolean,
+    tokenProfile: Boolean,
     onPinProtection: (PinProtection) -> Unit,
     onSave: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(28.dp)) {
-        ScreenHeading(stringResource(R.string.sign_in_method), stringResource(R.string.setup_description))
-        PinProtectionChoices(pinProtection, !busy, onPinProtection)
-        if (pinProtection == PinProtection.BIOMETRIC) {
+        ScreenHeading(
+            stringResource(R.string.sign_in_method),
+            stringResource(if (tokenProfile) R.string.token_lock_setup_description else R.string.setup_description),
+        )
+        PinProtectionChoices(pinProtection, !busy, onPinProtection, tokenProfile)
+        if (!tokenProfile && pinProtection == PinProtection.BIOMETRIC) {
             Text(
                 stringResource(R.string.setup_biometric_description),
                 style = MaterialTheme.typography.bodyMedium,

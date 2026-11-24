@@ -24,15 +24,24 @@ class ValidateDigitalIdSecurityStatusUseCase {
             status.tokenLevel == "lite" || status.tokenLevel == "high",
             DigitalIdPreflightFailure.UNSUPPORTED_PROFILE,
         )
-        check(status.deviceId == account.biometricDeviceId, DigitalIdPreflightFailure.DEVICE_MISMATCH)
-        check(status.timestamp.matches(account.creationTimestamp), DigitalIdPreflightFailure.TIMESTAMP_MISMATCH)
-        check(status.attemptsLeft > 0, DigitalIdPreflightFailure.ATTEMPTS_EXHAUSTED)
+        // Captured-token profiles trust the server values; PIN profiles must match them exactly.
+        account.biometricDeviceId?.let { check(status.deviceId == it, DigitalIdPreflightFailure.DEVICE_MISMATCH) }
+        account.creationTimestamp?.let {
+            check(status.timestamp.matches(it), DigitalIdPreflightFailure.TIMESTAMP_MISMATCH)
+        }
+        val attemptsLeft = status.attemptsLeft
+        if (!account.tokenProfile) {
+            check(attemptsLeft != null, DigitalIdPreflightFailure.ATTEMPTS_EXHAUSTED)
+        }
+        check(attemptsLeft == null || attemptsLeft > 0, DigitalIdPreflightFailure.ATTEMPTS_EXHAUSTED)
         val cooldown = status.cooldown
         check(
             cooldown == null || (cooldown.isFinite() && cooldown <= 0),
             DigitalIdPreflightFailure.COOLDOWN,
         )
-        check(!account.pinSalt.isNullOrEmpty(), DigitalIdPreflightFailure.PIN_SALT_MISSING)
+        if (account.biometricToken == null) {
+            check(!account.pinSalt.isNullOrEmpty(), DigitalIdPreflightFailure.PIN_SALT_MISSING)
+        }
     }
 
     private fun check(

@@ -1,0 +1,87 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 2,
+    "identityHash": "14701885d84967681ae395111d0879bd",
+    "entities": [
+      {
+        "tableName": "secrets",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`slot` TEXT NOT NULL, `accountId` INTEGER NOT NULL, `protection` TEXT NOT NULL, `alias` TEXT NOT NULL, `wrappedKey` BLOB NOT NULL, `wrappingIv` BLOB NOT NULL, `ciphertext` BLOB NOT NULL, `iv` BLOB NOT NULL, `tokenProfile` INTEGER NOT NULL DEFAULT 0, `cryptoVersion` INTEGER NOT NULL DEFAULT 1, PRIMARY KEY(`slot`))",
+        "fields": [
+          {
+            "fieldPath": "slot",
+            "columnName": "slot",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "accountId",
+            "columnName": "accountId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "protection",
+            "columnName": "protection",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "alias",
+            "columnName": "alias",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "wrappedKey",
+            "columnName": "wrappedKey",
+            "affinity": "BLOB",
+            "notNull": true
+          },
+          {
+            "fieldPath": "wrappingIv",
+            "columnName": "wrappingIv",
+            "affinity": "BLOB",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ciphertext",
+            "columnName": "ciphertext",
+            "affinity": "BLOB",
+            "notNull": true
+          },
+          {
+            "fieldPath": "iv",
+            "columnName": "iv",
+            "affinity": "BLOB",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tokenProfile",
+            "columnName": "tokenProfile",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "cryptoVersion",
+            "columnName": "cryptoVersion",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "1"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "slot"
+          ]
+        }
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '14701885d84967681ae395111d0879bd')"
+    ]
+  }
+}

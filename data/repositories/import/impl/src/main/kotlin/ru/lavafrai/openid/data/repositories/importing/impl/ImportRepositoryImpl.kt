@@ -74,7 +74,9 @@ class ImportRepositoryImpl : ImportRepository {
             currentCoroutineContext().ensureActive()
             val payload = StrictJson.obj(StrictJson.parse(plaintext))
             requireData(StrictJson.integer(payload["schema"]) == 1L, "IMPORT_SCHEMA_UNRECOGNIZED")
-            AccountCodec.decode(payload["account"])
+            AccountCodec.decode(payload["account"]).also { account ->
+                requireData(account.did.pinSalt != null, "DID_PIN_SALT_MISSING")
+            }
         } finally {
             keySpec.clearPassword()
             key?.fill(0)

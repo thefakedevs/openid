@@ -34,11 +34,17 @@ fun SettingsScreen(
         ProfileIdentity(state.account?.accountId)
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(stringResource(R.string.sign_in_method), style = MaterialTheme.typography.titleLarge)
-            PinProtectionChoices(state.pinProtection, !state.busy, onPinProtection)
+            PinProtectionChoices(state.pinProtection, !state.busy, onPinProtection, state.tokenProfile)
         }
         if (state.hasSettingsChanges) {
             Text(
                 when {
+                    state.tokenProfile && state.pinProtection == PinProtection.NOT_SAVED ->
+                        stringResource(R.string.token_lock_manual_settings)
+
+                    state.tokenProfile ->
+                        stringResource(R.string.settings_biometric_notice)
+
                     state.pinProtection == PinProtection.NOT_SAVED ->
                         stringResource(R.string.settings_manual_notice)
 

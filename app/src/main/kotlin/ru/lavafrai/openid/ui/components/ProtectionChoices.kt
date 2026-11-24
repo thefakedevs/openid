@@ -35,17 +35,20 @@ fun PinProtectionChoices(
     selected: PinProtection,
     enabled: Boolean,
     onSelect: (PinProtection) -> Unit,
+    tokenProfile: Boolean = false,
 ) {
     val unavailable = unavailable(VaultProtection.BIOMETRIC)
     Column(Modifier.selectableGroup(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         listOf(PinProtection.BIOMETRIC, PinProtection.NOT_SAVED).forEach { value ->
             val reason = if (value == PinProtection.BIOMETRIC) unavailable else null
-            val description = when (value) {
-                PinProtection.NOT_SAVED -> stringResource(R.string.pin_manual_description)
-
-                PinProtection.BIOMETRIC ->
-                    stringResource(R.string.pin_biometric_description)
-            }
+            val description = stringResource(
+                when {
+                    tokenProfile && value == PinProtection.NOT_SAVED -> R.string.token_lock_manual_description
+                    tokenProfile -> R.string.token_lock_biometric_description
+                    value == PinProtection.NOT_SAVED -> R.string.pin_manual_description
+                    else -> R.string.pin_biometric_description
+                },
+            )
             ChoiceCard(
                 title = value.label(),
                 description = reason?.message()?.resolve() ?: description,

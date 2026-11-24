@@ -22,4 +22,6 @@ dependencies {
     api(projects.max.api)
     api(projects.digitalid.api)
     api(projects.maximport.api)
+    testImplementation(libs.kotlin.test.junit)
+    testImplementation(libs.junit)
 }

@@ -60,6 +60,7 @@ fun RootSourceScreen(
     check: RootCheckState,
     maxInstalled: Boolean,
     suManagers: List<String>,
+    dfRootSupported: Boolean,
     busy: Boolean,
     onSelect: (RootSource) -> Unit,
     onRefreshCheck: () -> Unit,
@@ -111,9 +112,9 @@ fun RootSourceScreen(
             )
             ChoiceCard(
                 title = stringResource(R.string.root_dfroot_label),
-                description = dfRootDescription(suManagers, android.os.Build.VERSION.SDK_INT >= 28),
+                description = dfRootDescription(suManagers, dfRootSupported),
                 selected = selected == RootSource.DFROOT,
-                enabled = !busy && android.os.Build.VERSION.SDK_INT >= 28,
+                enabled = !busy && dfRootSupported,
                 onClick = { onSelect(RootSource.DFROOT) },
                 icon = Symbols.drawable.materialsymbols_ic_electric_bolt_rounded,
             )
@@ -131,7 +132,7 @@ fun RootSourceScreen(
                 icon = Symbols.drawable.materialsymbols_ic_info_rounded,
             )
 
-            selected == RootSource.DFROOT && check != RootCheckState.AVAILABLE && !busy ->
+            selected == RootSource.DFROOT && dfRootSupported && check != RootCheckState.AVAILABLE && !busy ->
                 DfRootGuidance(suManagers.isNotEmpty(), context, onRunDfRoot)
         }
         PrimaryButton(
@@ -205,12 +206,12 @@ private const val MAX_TRACE_CHARS = 20_000
 @Composable
 private fun dfRootDescription(
     suManagers: List<String>,
-    sdkSupported: Boolean,
+    supported: Boolean,
 ): String {
+    if (!supported) return stringResource(R.string.root_dfroot_unsupported)
     val base = stringResource(R.string.root_dfroot_description)
     var text = base
     if (suManagers.isEmpty()) text += " " + stringResource(R.string.root_dfroot_no_manager_suffix)
-    if (!sdkSupported) text += " " + stringResource(R.string.root_dfroot_sdk_suffix)
     return text
 }
 

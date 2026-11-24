@@ -29,6 +29,8 @@ sealed interface QrGenerationFailure {
 
     data object AuthorizationRejected : QrGenerationFailure
 
+    data object CapturedTokenRejected : QrGenerationFailure
+
     data object AlreadyRunning : QrGenerationFailure
 
     data object OperationFailed : QrGenerationFailure

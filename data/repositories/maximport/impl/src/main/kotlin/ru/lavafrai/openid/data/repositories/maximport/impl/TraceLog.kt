@@ -11,7 +11,9 @@ import ru.lavafrai.openid.data.repositories.maximport.api.RootImportPackages
  * separator instead of wiping the file, and the log is capped so it cannot grow without bound.
  */
 internal open class TraceLog(private val file: File) {
-    constructor(context: Context) : this(File(context.cacheDir, RootImportPackages.TRACE_LOG_FILE))
+    constructor(context: Context) : this(File(context.cacheDir, RootImportPackages.TRACE_LOG_FILE)) {
+        File(context.cacheDir, "maximport_trace.log").delete()
+    }
 
     private val lock = Any()
 

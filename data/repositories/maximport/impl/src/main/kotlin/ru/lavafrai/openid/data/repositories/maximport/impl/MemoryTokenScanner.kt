@@ -27,7 +27,7 @@ internal class MemoryTokenScanner(
 
     suspend fun capture(): Capture {
         val pid = resolveMaxPid()
-        trace.line("scan pid=$pid")
+        trace.line("scan target running=${pid != null}")
         if (pid == null) return Capture.NotFound
         val maps = shell.text("cat /proc/$pid/maps")
         trace.line("maps chars=${maps?.length}")
@@ -63,7 +63,7 @@ internal class MemoryTokenScanner(
             }
             if (!readable) {
                 failures++
-                trace.line("region $index unreadable start=$start size=$size")
+                trace.line("region $index unreadable size=$size")
             }
             if (found.size > 1) break
         }

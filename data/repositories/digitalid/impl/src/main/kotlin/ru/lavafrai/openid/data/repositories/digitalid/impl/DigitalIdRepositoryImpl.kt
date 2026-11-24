@@ -30,11 +30,8 @@ class DigitalIdRepositoryImpl internal constructor(private val http: DigitalIdHt
     ): Map<String, Any?> {
         token?.let { AccountCodec.requireNonEmptyString(it.value) }
         val reply = http.call(launch, method, path, token?.value)
-        if (reply.status !in 200..299) {
-            DebugTrace.line(
-                "http $method $path status=${reply.status} body=" +
-                    String(reply.body, Charsets.UTF_8).take(200),
-            )
+        if (BuildConfig.DEBUG && reply.status !in 200..299) {
+            DebugTrace.line("http $method $path status=${reply.status}")
         }
         requireData(reply.status in 200..299, "DIGITAL_ID_HTTP_REJECTED_${reply.status}")
         requireData(
